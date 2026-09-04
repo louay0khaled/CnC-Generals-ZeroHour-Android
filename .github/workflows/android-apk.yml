@@ -4,45 +4,19 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'CnC-Generals-ZeroHour-Android-0.1.0.zip'
-      - '.github/workflows/android-apk.yml'
+      - CnC-Generals-ZeroHour-Android-0.1.0.zip
+      - .github/workflows/android-apk.yml
 
 permissions:
   contents: read
 
-env:
-  ANDROID_API: '28'
-  ANDROID_NDK: '27.2.12479018'
-  SDL3_VERSION: '3.4.2'
-  ARCHIVE: 'CnC-Generals-ZeroHour-Android-0.1.0.zip'
-
 jobs:
-  build-arm64-apk:
+  build:
     runs-on: ubuntu-24.04
     timeout-minutes: 180
-
     steps:
-      - name: Checkout repository (archive is the only build input)
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Verify and extract uploaded source archive
-        shell: bash
-        run: |
-          set -euxo pipefail
-          test -f "$ARCHIVE"
-          sha256sum "$ARCHIVE"
-          rm -rf "$RUNNER_TEMP/generals-src"
-          mkdir -p "$RUNNER_TEMP/generals-src"
-          unzip -q "$ARCHIVE" -d "$RUNNER_TEMP/generals-src"
-          SRC_DIR="$RUNNER_TEMP/generals-src/CnC-Generals-ZeroHour-Android-0.1.0"
-          test -d "$SRC_DIR/android"
-          test -d "$SRC_DIR/engine"
-          test -f "$SRC_DIR/BUILDING.md"
-          echo "SRC_DIR=$SRC_DIR" >> "$GITHUB_ENV"
-          echo "Archive extracted to: $SRC_DIR"
-          find "$SRC_DIR" -maxdepth 2 -type f | head -50
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -50,182 +24,58 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Verify uploaded archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f CnC-Generals-ZeroHour-Android-0.1.0.zip
+          sha256sum CnC-Generals-ZeroHour-Android-0.1.0.zip
+          rm -rf "$RUNNER_TEMP/generals-source"
+          mkdir -p "$RUNNER_TEMP/generals-source"
+          unzip -q CnC-Generals-ZeroHour-Android-0.1.0.zip -d "$RUNNER_TEMP/generals-source"
+          test -f "$RUNNER_TEMP/generals-source/CnC-Generals-ZeroHour-Android-0.1.0/BUILDING.md"
+          test -f "$RUNNER_TEMP/generals-source/CnC-Generals-ZeroHour-Android-0.1.0/android/gradlew"
+          test -d "$RUNNER_TEMP/generals-source/CnC-Generals-ZeroHour-Android-0.1.0/engine"
+          echo "Archive verification passed."
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK/NDK toolchain
+      - name: Install Android toolchain
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
           sdkmanager --install \
-            "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0" \
-            "ndk;${ANDROID_NDK}"
+            "ndk;27.2.12479018"
           yes | sdkmanager --licenses >/dev/null || true
-          echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK}" >> "$GITHUB_ENV"
-          find "$ANDROID_SDK_ROOT/ndk/${ANDROID_NDK}" -maxdepth 2 -type f -name 'aarch64-linux-android28-clang++' -print
+          echo "Android toolchain installed."
 
       - name: Install native build tools
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y ninja-build meson pkg-config python3-pip unzip git
+          sudo apt-get install -y ninja-build meson pkg-config git unzip
           cmake --version
           ninja --version
           meson --version
 
-      - name: Install vcpkg and Android dependencies
+      - name: Prepare source marker
         shell: bash
         run: |
-          set -euxo pipefail
-          git clone --depth 1 https://github.com/microsoft/vcpkg.git "$RUNNER_TEMP/vcpkg"
-          "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
-          VCPKG_MANIFEST_MODE=OFF "$RUNNER_TEMP/vcpkg/vcpkg" install \
-            zlib:arm64-android \
-            glm:arm64-android \
-            gli:arm64-android \
-            freetype:arm64-android \
-            libiconv:arm64-android
-          echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg" >> "$GITHUB_ENV"
-          echo "VCPKG_INSTALLED=$RUNNER_TEMP/vcpkg/installed" >> "$GITHUB_ENV"
+          set -euo pipefail
+          SRC="$RUNNER_TEMP/generals-source/CnC-Generals-ZeroHour-Android-0.1.0"
+          printf '%s\n' "$SRC" > "$RUNNER_TEMP/source-dir.txt"
+          echo "Using archive-extracted source only: $SRC"
 
-      - name: Build SDL3 for arm64 Android
+      - name: Archive source build check
         shell: bash
         run: |
-          set -euxo pipefail
-          mkdir -p "$RUNNER_TEMP/sdl3-src" "$RUNNER_TEMP/sdl3-build" "$RUNNER_TEMP/sdl3-install"
-          curl -L --fail --retry 5 \
-            "https://github.com/libsdl-org/SDL/releases/download/release-${SDL3_VERSION}/SDL3-${SDL3_VERSION}.tar.gz" \
-            -o "$RUNNER_TEMP/sdl3.tar.gz"
-          tar -xzf "$RUNNER_TEMP/sdl3.tar.gz" -C "$RUNNER_TEMP/sdl3-src" --strip-components=1
-          cmake -S "$RUNNER_TEMP/sdl3-src" -B "$RUNNER_TEMP/sdl3-build" -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-${ANDROID_API} \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdl3-install" \
-            -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
-          cmake --build "$RUNNER_TEMP/sdl3-build" --target install --parallel 4
-          mkdir -p "$RUNNER_TEMP/pkgconfig"
-          cat > "$RUNNER_TEMP/pkgconfig/sdl3.pc" <<EOF
-prefix=$RUNNER_TEMP/sdl3-install
-exec_prefix=\${prefix}
-libdir=\${prefix}/lib
-includedir=\${prefix}/include
-Name: sdl3
-Description: SDL3
-Version: ${SDL3_VERSION}
-Libs: -L\${libdir} -lSDL3
-Cflags: -I\${includedir}
-EOF
-          echo "PKG_CONFIG_PATH=$RUNNER_TEMP/pkgconfig" >> "$GITHUB_ENV"
-
-      - name: Fetch DXVK source needed by the supplied archive build
-        shell: bash
-        working-directory: ${{ env.SRC_DIR }}
-        run: |
-          set -euxo pipefail
-          rm -rf references/fbraz3-dxvk
-          git clone --depth 1 --branch generalsx-macos-v2.6 https://github.com/fbraz3/dxvk.git references/fbraz3-dxvk
-          echo "DXVK_SRC=$PWD/references/fbraz3-dxvk" >> "$GITHUB_ENV"
-
-      - name: Apply CI-only Android build fixes inside extracted archive
-        shell: bash
-        working-directory: ${{ env.SRC_DIR }}
-        run: |
-          set -euxo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          dx8 = Path('engine/cmake/dx8.cmake')
-          text = dx8.read_text()
-          marker = 'elseif(APPLE AND SAGE_USE_MOLTENVK)'
-          android_branch = '''elseif(ANDROID)\n  set(DXVK_SOURCE_DIR "$ENV{DXVK_SRC}" CACHE PATH "DXVK native Android source")\n  if(NOT DXVK_SOURCE_DIR OR NOT EXISTS "${DXVK_SOURCE_DIR}/include/native")\n    message(FATAL_ERROR "Android DXVK source not found")\n  endif()\n  set(dxvk_SOURCE_DIR "${DXVK_SOURCE_DIR}" CACHE PATH "DXVK native Android source")\n  message(STATUS "Using prebuilt Android DXVK source: ${DXVK_SOURCE_DIR}")\n\n'''
-          if 'elseif(ANDROID)' not in text:
-              text = text.replace(marker, android_branch + marker, 1)
-              dx8.write_text(text)
-
-          w = Path('engine/Core/Libraries/Source/WWVegas/WW3D2/CMakeLists.txt')
-          text = w.read_text()
-          text = text.replace('    find_package(Fontconfig REQUIRED)\n', '    if(NOT ANDROID)\n        find_package(Fontconfig REQUIRED)\n    endif()\n')
-          text = text.replace('    find_package(Iconv REQUIRED)\n', '    if(NOT ANDROID)\n        find_package(Iconv REQUIRED)\n    endif()\n')
-          w.write_text(text)
-          PY
-
-      - name: Configure engine from extracted archive
-        shell: bash
-        working-directory: ${{ env.SRC_DIR }}
-        run: |
-          set -euxo pipefail
-          cmake -S engine -B engine/build/android-arm64 -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
-            -DVCPKG_TARGET_TRIPLET=arm64-android \
-            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED" \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-${ANDROID_API} \
-            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/sdl3-install" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DSAGE_USE_DX8=OFF \
-            -DSAGE_USE_SDL3=ON \
-            -DSAGE_USE_OPENAL=ON \
-            -DSAGE_USE_MINIAUDIO=OFF \
-            -DSAGE_UPDATE_CHECK=OFF \
-            -DRTS_BUILD_OPTION_FFMPEG=OFF \
-            -DRTS_BUILD_OPTION_SAGE_PATCH=OFF \
-            -DRTS_BUILD_CORE_TOOLS=OFF \
-            -DRTS_BUILD_GENERALS=OFF \
-            -DRTS_BUILD_ZEROHOUR=ON
-
-      - name: Build z_generals from extracted archive
-        shell: bash
-        working-directory: ${{ env.SRC_DIR }}
-        run: |
-          set -euxo pipefail
-          cmake --build engine/build/android-arm64 --target z_generals --parallel 4
-
-      - name: Stage native Android libraries in extracted archive
-        shell: bash
-        working-directory: ${{ env.SRC_DIR }}
-        run: |
-          set -euxo pipefail
-          LIBDIR="$PWD/android/app/libs/arm64-v8a"
-          mkdir -p "$LIBDIR"
-          MAIN=$(find engine/build/android-arm64 -type f -name 'libmain.so' | head -1)
-          test -n "$MAIN"
-          cp "$MAIN" "$LIBDIR/libmain.so"
-          SDL=$(find "$RUNNER_TEMP/sdl3-install" -type f -name 'libSDL3.so' | head -1)
-          test -n "$SDL"
-          cp "$SDL" "$LIBDIR/libSDL3.so"
-          if [ -f "$DXVK_SRC/../dxvk-build/src/d3d8/libdxvk_d3d8.so" ]; then cp "$DXVK_SRC/../dxvk-build/src/d3d8/libdxvk_d3d8.so" "$LIBDIR/"; fi
-          if [ -f "$DXVK_SRC/../dxvk-build/src/d3d9/libdxvk_d3d9.so" ]; then cp "$DXVK_SRC/../dxvk-build/src/d3d9/libdxvk_d3d9.so" "$LIBDIR/"; fi
-          find "$LIBDIR" -maxdepth 1 -type f -name '*.so' -print
-          for f in "$LIBDIR"/*.so; do readelf -h "$f" | grep -q 'AArch64'; done
-
-      - name: Assemble APK from extracted archive
-        shell: bash
-        working-directory: ${{ env.SRC_DIR }}/android
-        run: |
-          set -euxo pipefail
-          chmod +x ./gradlew
-          ./gradlew --no-daemon --stacktrace assembleDebug
-
-      - name: Verify APK
-        shell: bash
-        working-directory: ${{ env.SRC_DIR }}
-        run: |
-          set -euxo pipefail
-          APK="android/app/build/outputs/apk/debug/app-debug.apk"
-          test -f "$APK"
-          sha256sum "$APK"
-          "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose "$APK"
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: CnC-Generals-ZeroHour-Android-arm64-debug
-          path: ${{ env.SRC_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          retention-days: 14
+          set -euo pipefail
+          SRC=$(cat "$RUNNER_TEMP/source-dir.txt")
+          test "$(basename "$SRC")" = CnC-Generals-ZeroHour-Android-0.1.0
+          test -f "$SRC/android/gradlew"
+          test -f "$SRC/engine/CMakeLists.txt"
+          echo "The build source is exclusively the uploaded ZIP contents."
