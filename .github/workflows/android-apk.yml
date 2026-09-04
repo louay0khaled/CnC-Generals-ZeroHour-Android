@@ -63,14 +63,11 @@ jobs:
         run: |
           set -euxo pipefail
           cd "$SRC"
-          # The supplied archive predates the Android-specific DXVK CMake branch.
-          # Add that build wiring at build time; the engine/source files still come only from the ZIP.
           python3 - <<'PY'
           from pathlib import Path
           p = Path('engine/cmake/dx8.cmake')
           s = p.read_text()
-          marker = 'elseif(ANDROID)'
-          if marker not in s:
+          if 'elseif(ANDROID)' not in s:
               needle = 'elseif(APPLE AND SAGE_USE_MOLTENVK)'
               branch = r'''elseif(ANDROID)
                 find_program(MESON_EXECUTABLE meson REQUIRED)
@@ -106,18 +103,19 @@ jobs:
               s = s.replace(needle, branch + '\n' + needle, 1)
               p.write_text(s)
           PY
-          # Android does not provide desktop fontconfig; keep FreeType and Iconv.
           python3 - <<'PY'
           import json
           from pathlib import Path
           p=Path('engine/vcpkg.json')
           d=json.loads(p.read_text())
+          names={x if isinstance(x,str) else x.get('name') for x in d['dependencies']}
+          if 'libpng' not in names:
+              d['dependencies'].insert(0, 'libpng')
           for dep in d['dependencies']:
               if isinstance(dep, dict) and dep.get('name') == 'fontconfig':
                   dep['platform'] = '!windows & !android'
           p.write_text(json.dumps(d, indent=2) + '\n')
           PY
-          # Avoid desktop-only fontconfig linkage on Android.
           python3 - <<'PY'
           from pathlib import Path
           p=Path('engine/Core/Libraries/Source/WWVegas/WW3D2/CMakeLists.txt')
@@ -140,6 +138,8 @@ jobs:
           ./bootstrap-vcpkg.sh -disableMetrics
           echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg" >> "$GITHUB_ENV"
           "$RUNNER_TEMP/vcpkg/vcpkg" install --triplet=arm64-android --x-manifest-root="$SRC/engine" --x-install-root="$RUNNER_TEMP/vcpkg-installed"
+          test -f "$RUNNER_TEMP/vcpkg-installed/arm64-android/include/png.h"
+          test -f "$RUNNER_TEMP/vcpkg-installed/arm64-android/lib/libpng16.a"
 
       - name: Configure native engine from archive
         shell: bash
@@ -154,6 +154,7 @@ jobs:
             -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
             -DVCPKG_TARGET_TRIPLET=arm64-android \
             -DVCPKG_INSTALLED_DIR="$RUNNER_TEMP/vcpkg-installed" \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/vcpkg-installed/arm64-android" \
             -DSAGE_USE_SDL3=ON \
             -DSAGE_USE_OPENAL=ON \
             -DSAGE_USE_MINIAUDIO=OFF \
