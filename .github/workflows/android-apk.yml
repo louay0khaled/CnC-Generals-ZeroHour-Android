@@ -1,4 +1,4 @@
-name: Android APK build from uploaded archive
+name: Build Android APK from uploaded archive
 
 on:
   workflow_dispatch:
@@ -10,10 +10,14 @@ on:
 permissions:
   contents: read
 
+env:
+  ANDROID_NDK_VERSION: 27.2.12479018
+  VCPKG_COMMIT: 533a5fda5c0646d1771345fb572e759283444d5f
+
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 360
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -24,58 +28,193 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Verify uploaded archive
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -f CnC-Generals-ZeroHour-Android-0.1.0.zip
-          sha256sum CnC-Generals-ZeroHour-Android-0.1.0.zip
-          rm -rf "$RUNNER_TEMP/generals-source"
-          mkdir -p "$RUNNER_TEMP/generals-source"
-          unzip -q CnC-Generals-ZeroHour-Android-0.1.0.zip -d "$RUNNER_TEMP/generals-source"
-          test -f "$RUNNER_TEMP/generals-source/CnC-Generals-ZeroHour-Android-0.1.0/BUILDING.md"
-          test -f "$RUNNER_TEMP/generals-source/CnC-Generals-ZeroHour-Android-0.1.0/android/gradlew"
-          test -d "$RUNNER_TEMP/generals-source/CnC-Generals-ZeroHour-Android-0.1.0/engine"
-          echo "Archive verification passed."
-
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android toolchain
+      - name: Install Android and native toolchain
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           sdkmanager --install \
             "platforms;android-35" \
             "build-tools;35.0.0" \
-            "ndk;27.2.12479018"
+            "ndk;${ANDROID_NDK_VERSION}" \
+            "cmake;3.31.6"
           yes | sdkmanager --licenses >/dev/null || true
-          echo "Android toolchain installed."
-
-      - name: Install native build tools
-        shell: bash
-        run: |
-          set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y ninja-build meson pkg-config git unzip
-          cmake --version
-          ninja --version
-          meson --version
+          sudo apt-get install -y ninja-build meson pkg-config git unzip autoconf automake libtool
+          echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
 
-      - name: Prepare source marker
+      - name: Extract uploaded archive (exclusive source)
         shell: bash
         run: |
-          set -euo pipefail
-          SRC="$RUNNER_TEMP/generals-source/CnC-Generals-ZeroHour-Android-0.1.0"
-          printf '%s\n' "$SRC" > "$RUNNER_TEMP/source-dir.txt"
-          echo "Using archive-extracted source only: $SRC"
+          set -euxo pipefail
+          test -f CnC-Generals-ZeroHour-Android-0.1.0.zip
+          rm -rf "$RUNNER_TEMP/generals-source"
+          mkdir -p "$RUNNER_TEMP/generals-source"
+          unzip -q CnC-Generals-ZeroHour-Android-0.1.0.zip -d "$RUNNER_TEMP/generals-source"
+          echo "SRC=$RUNNER_TEMP/generals-source/CnC-Generals-ZeroHour-Android-0.1.0" >> "$GITHUB_ENV"
+          test -f "$RUNNER_TEMP/generals-source/CnC-Generals-ZeroHour-Android-0.1.0/engine/CMakeLists.txt"
+          test -f "$RUNNER_TEMP/generals-source/CnC-Generals-ZeroHour-Android-0.1.0/android/gradlew"
+          sha256sum CnC-Generals-ZeroHour-Android-0.1.0.zip
 
-      - name: Archive source build check
+      - name: Prepare Android build fixes from archive source
         shell: bash
         run: |
-          set -euo pipefail
-          SRC=$(cat "$RUNNER_TEMP/source-dir.txt")
-          test "$(basename "$SRC")" = CnC-Generals-ZeroHour-Android-0.1.0
-          test -f "$SRC/android/gradlew"
-          test -f "$SRC/engine/CMakeLists.txt"
-          echo "The build source is exclusively the uploaded ZIP contents."
+          set -euxo pipefail
+          cd "$SRC"
+          # The supplied archive predates the Android-specific DXVK CMake branch.
+          # Add that build wiring at build time; the engine/source files still come only from the ZIP.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('engine/cmake/dx8.cmake')
+          s = p.read_text()
+          marker = 'elseif(ANDROID)'
+          if marker not in s:
+              needle = 'elseif(APPLE AND SAGE_USE_MOLTENVK)'
+              branch = r'''elseif(ANDROID)
+                find_program(MESON_EXECUTABLE meson REQUIRED)
+                find_program(NINJA_EXECUTABLE ninja REQUIRED)
+                include(ExternalProject)
+                set(DXVK_SOURCE_DIR "${CMAKE_BINARY_DIR}/_deps/dxvk-src-android")
+                set(DXVK_BUILD_DIR "${CMAKE_BINARY_DIR}/_deps/dxvk-build-android")
+                set(DXVK_REMOTE_REF "46a3bc018bcae408d49d3c500e4e536a11f6789a")
+                set(DXVK_CROSS_FILE "${CMAKE_BINARY_DIR}/meson-arm64-android.ini")
+                file(WRITE "${DXVK_CROSS_FILE}" "[binaries]\n")
+                file(APPEND "${DXVK_CROSS_FILE}" "c = '${CMAKE_C_COMPILER}'\ncpp = '${CMAKE_CXX_COMPILER}'\nld = '${CMAKE_LINKER}'\nar = '${CMAKE_AR}'\nstrip = '${CMAKE_STRIP}'\n\n[host_machine]\nsystem = 'android'\ncpu_family = 'aarch64'\ncpu = 'armv8-a'\nendian = 'little'\n\n[built-in options]\nc_args = ['-fPIC']\ncpp_args = ['-fPIC']\n\n[properties]\nsys_root = '${CMAKE_SYSROOT}'\n\n[project options]\ndxvk_native_wsi = 'sdl3'\n")
+                set(DXVK_SDL3_PC_DIR "${CMAKE_BINARY_DIR}/sdl3-pkgconfig")
+                file(MAKE_DIRECTORY "${DXVK_SDL3_PC_DIR}")
+                file(WRITE "${DXVK_SDL3_PC_DIR}/sdl3.pc" "prefix=${CMAKE_BINARY_DIR}/_deps/sdl3-src\nlibdir=${CMAKE_BINARY_DIR}/_deps/sdl3-build\nincludedir=${CMAKE_BINARY_DIR}/_deps/sdl3-src/include\nName: sdl3\nDescription: SDL3\nVersion: 3.4.2\nLibs: -L${CMAKE_BINARY_DIR}/_deps/sdl3-build -lSDL3\nCflags: -I${CMAKE_BINARY_DIR}/_deps/sdl3-src/include\n")
+                set(DXVK_D3D8_LIB "${DXVK_BUILD_DIR}/src/d3d8/libdxvk_d3d8.so")
+                set(DXVK_D3D9_LIB "${DXVK_BUILD_DIR}/src/d3d9/libdxvk_d3d9.so")
+                ExternalProject_Add(dxvk_android_build
+                  GIT_REPOSITORY https://github.com/fbraz3/dxvk.git
+                  GIT_TAG ${DXVK_REMOTE_REF}
+                  GIT_SHALLOW FALSE
+                  SOURCE_DIR ${DXVK_SOURCE_DIR}
+                  BINARY_DIR ${DXVK_BUILD_DIR}
+                  CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env "PKG_CONFIG_PATH=${DXVK_SDL3_PC_DIR}" ${MESON_EXECUTABLE} setup ${DXVK_BUILD_DIR} ${DXVK_SOURCE_DIR} --cross-file ${DXVK_CROSS_FILE} --buildtype=release -Ddxvk_native_wsi=sdl3
+                  BUILD_COMMAND ${NINJA_EXECUTABLE} -C ${DXVK_BUILD_DIR} src/d3d9/libdxvk_d3d9.so src/d3d8/libdxvk_d3d8.so
+                  INSTALL_COMMAND ""
+                  UPDATE_DISCONNECTED FALSE
+                )
+                add_custom_target(dxvk_android_install ALL DEPENDS ${DXVK_D3D8_LIB} ${DXVK_D3D9_LIB})
+                add_dependencies(dxvk_android_install dxvk_android_build)
+                set(dxvk_SOURCE_DIR "${DXVK_SOURCE_DIR}" CACHE PATH "DXVK Android source")
+                set(DXVK_INCLUDE_DIR "${DXVK_SOURCE_DIR}/include/native" CACHE PATH "DXVK Android headers")
+          '''
+              s = s.replace(needle, branch + '\n' + needle, 1)
+              p.write_text(s)
+          PY
+          # Android does not provide desktop fontconfig; keep FreeType and Iconv.
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('engine/vcpkg.json')
+          d=json.loads(p.read_text())
+          for dep in d['dependencies']:
+              if isinstance(dep, dict) and dep.get('name') == 'fontconfig':
+                  dep['platform'] = '!windows & !android'
+          p.write_text(json.dumps(d, indent=2) + '\n')
+          PY
+          # Avoid desktop-only fontconfig linkage on Android.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('engine/Core/Libraries/Source/WWVegas/WW3D2/CMakeLists.txt')
+          s=p.read_text()
+          old='''if(UNIX)\n    find_package(Freetype REQUIRED)\n    # GeneralsX @build felipebraz 20/06/2025 fontconfig needed on macOS too (render2dsentence.cpp uses Locate_Font_FontConfig)\n    find_package(Fontconfig REQUIRED)\n    # GeneralsX @build felipebraz 24/02/2026 fontconfig static lib (vcpkg) links iconv; must be explicit on macOS\n    find_package(Iconv REQUIRED)\nendif()'''
+          new='''if(UNIX)\n    find_package(Freetype REQUIRED)\n    if(NOT ANDROID)\n        find_package(Fontconfig REQUIRED)\n    endif()\n    find_package(Iconv REQUIRED)\nendif()'''
+          if old in s: s=s.replace(old,new)
+          s=s.replace('    $<$<PLATFORM_ID:Android>:Fontconfig::Fontconfig>\n','')
+          p.write_text(s)
+          PY
+
+      - name: Build vcpkg dependencies for arm64 Android
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd "$RUNNER_TEMP"
+          git clone https://github.com/microsoft/vcpkg.git vcpkg
+          cd vcpkg
+          git checkout "$VCPKG_COMMIT"
+          ./bootstrap-vcpkg.sh -disableMetrics
+          echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/vcpkg/vcpkg" install --triplet=arm64-android --x-manifest-root="$SRC/engine" --x-install-root="$RUNNER_TEMP/vcpkg-installed"
+
+      - name: Configure native engine from archive
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd "$SRC/engine"
+          cmake -S . -B build/android-arm64 -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-28 \
+            -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DVCPKG_TARGET_TRIPLET=arm64-android \
+            -DVCPKG_INSTALLED_DIR="$RUNNER_TEMP/vcpkg-installed" \
+            -DSAGE_USE_SDL3=ON \
+            -DSAGE_USE_OPENAL=ON \
+            -DSAGE_USE_MINIAUDIO=OFF \
+            -DSAGE_USE_GLM=ON \
+            -DSAGE_USE_DX8=OFF \
+            -DSAGE_UPDATE_CHECK=OFF \
+            -DRTS_BUILD_OPTION_SAGE_PATCH=OFF \
+            -DRTS_BUILD_OPTION_FFMPEG=OFF \
+            -DRTS_GAMEMEMORY_ENABLE=OFF \
+            -DRTS_BUILD_ZEROHOUR=ON \
+            -DRTS_BUILD_GENERALS=OFF \
+            -DRTS_BUILD_CORE_TOOLS=OFF \
+            -DRTS_BUILD_ZEROHOUR_TOOLS=OFF \
+            -DRTS_BUILD_ZEROHOUR_EXTRAS=OFF \
+            -DRTS_BUILD_GENERALS_TOOLS=OFF
+
+      - name: Build native engine
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd "$SRC/engine"
+          cmake --build build/android-arm64 --target z_generals -j2
+          test -f build/android-arm64/GeneralsMD/Code/Main/libmain.so
+
+      - name: Stage native libraries into Android project
+        shell: bash
+        run: |
+          set -euxo pipefail
+          APP="$SRC/android/app"
+          LIB="$APP/libs/arm64-v8a"
+          mkdir -p "$LIB"
+          cp "$SRC/engine/build/android-arm64/GeneralsMD/Code/Main/libmain.so" "$LIB/libmain.so"
+          find "$SRC/engine/build/android-arm64" -type f \( -name 'libSDL3.so*' -o -name 'libSDL3_image.so*' -o -name 'libopenal.so*' -o -name 'libgamespy.so*' -o -name 'libdxvk_d3d8.so*' -o -name 'libdxvk_d3d9.so*' \) -exec cp -f {} "$LIB/" \;
+          ls -lh "$LIB"
+          test -f "$LIB/libdxvk_d3d8.so"
+          test -f "$LIB/libdxvk_d3d9.so"
+
+      - name: Assemble APK
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd "$SRC/android"
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace assembleDebug
+          test -f app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Verify APK and native ABI
+        shell: bash
+        run: |
+          set -euxo pipefail
+          APK="$SRC/android/app/build/outputs/apk/debug/app-debug.apk"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$APK"
+          unzip -l "$APK" | grep -q 'lib/arm64-v8a/libmain.so'
+          unzip -l "$APK" | grep -q 'lib/arm64-v8a/libdxvk_d3d8.so'
+          unzip -l "$APK" | grep -q 'lib/arm64-v8a/libdxvk_d3d9.so'
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -h "$SRC/android/app/libs/arm64-v8a/libmain.so" | grep -q 'AArch64'
+
+      - name: Upload final APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GeneralsZH-Android-arm64-debug
+          path: ${{ env.SRC }}/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
