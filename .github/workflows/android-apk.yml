@@ -1,14 +1,11 @@
-name: Android APK build
+name: Android APK build from uploaded archive
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - 'android/**'
-      - 'engine/**'
-      - 'scripts/**'
+      - 'CnC-Generals-ZeroHour-Android-0.1.0.zip'
       - '.github/workflows/android-apk.yml'
-      - 'BUILDING.md'
 
 permissions:
   contents: read
@@ -17,17 +14,35 @@ env:
   ANDROID_API: '28'
   ANDROID_NDK: '27.2.12479018'
   SDL3_VERSION: '3.4.2'
+  ARCHIVE: 'CnC-Generals-ZeroHour-Android-0.1.0.zip'
 
 jobs:
   build-arm64-apk:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 180
 
     steps:
-      - name: Checkout source archive equivalent
+      - name: Checkout repository (archive is the only build input)
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+
+      - name: Verify and extract uploaded source archive
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -f "$ARCHIVE"
+          sha256sum "$ARCHIVE"
+          rm -rf "$RUNNER_TEMP/generals-src"
+          mkdir -p "$RUNNER_TEMP/generals-src"
+          unzip -q "$ARCHIVE" -d "$RUNNER_TEMP/generals-src"
+          SRC_DIR="$RUNNER_TEMP/generals-src/CnC-Generals-ZeroHour-Android-0.1.0"
+          test -d "$SRC_DIR/android"
+          test -d "$SRC_DIR/engine"
+          test -f "$SRC_DIR/BUILDING.md"
+          echo "SRC_DIR=$SRC_DIR" >> "$GITHUB_ENV"
+          echo "Archive extracted to: $SRC_DIR"
+          find "$SRC_DIR" -maxdepth 2 -type f | head -50
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -48,20 +63,20 @@ jobs:
             "build-tools;35.0.0" \
             "ndk;${ANDROID_NDK}"
           yes | sdkmanager --licenses >/dev/null || true
-          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}"
-          echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK}"
+          echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK}" >> "$GITHUB_ENV"
+          find "$ANDROID_SDK_ROOT/ndk/${ANDROID_NDK}" -maxdepth 2 -type f -name 'aarch64-linux-android28-clang++' -print
 
       - name: Install native build tools
         shell: bash
         run: |
           set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y ninja-build meson pkg-config python3-pip unzip
+          sudo apt-get install -y ninja-build meson pkg-config python3-pip unzip git
           cmake --version
           ninja --version
           meson --version
 
-      - name: Install vcpkg native dependencies for Android
+      - name: Install vcpkg and Android dependencies
         shell: bash
         run: |
           set -euxo pipefail
@@ -72,11 +87,11 @@ jobs:
             glm:arm64-android \
             gli:arm64-android \
             freetype:arm64-android \
-            --x-install-root "$RUNNER_TEMP/vcpkg-installed"
+            libiconv:arm64-android
           echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg" >> "$GITHUB_ENV"
-          echo "VCPKG_INSTALLED=$RUNNER_TEMP/vcpkg-installed" >> "$GITHUB_ENV"
+          echo "VCPKG_INSTALLED=$RUNNER_TEMP/vcpkg/installed" >> "$GITHUB_ENV"
 
-      - name: Build SDL3 for arm64 Android (for DXVK WSI)
+      - name: Build SDL3 for arm64 Android
         shell: bash
         run: |
           set -euxo pipefail
@@ -84,94 +99,41 @@ jobs:
           curl -L --fail --retry 5 \
             "https://github.com/libsdl-org/SDL/releases/download/release-${SDL3_VERSION}/SDL3-${SDL3_VERSION}.tar.gz" \
             -o "$RUNNER_TEMP/sdl3.tar.gz"
-          echo "ef39a2e3f9a8a78296c40da701967dd1b0d0d6e267e483863ce70f8a03b4050c  $RUNNER_TEMP/sdl3.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/sdl3.tar.gz" -C "$RUNNER_TEMP/sdl3-src" --strip-components=1
-          "$ANDROID_SDK_ROOT/cmake/3.22.1/bin/cmake" -S "$RUNNER_TEMP/sdl3-src" -B "$RUNNER_TEMP/sdl3-build" -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_SDK_ROOT/ndk/${ANDROID_NDK}/build/cmake/android.toolchain.cmake" \
+          cmake -S "$RUNNER_TEMP/sdl3-src" -B "$RUNNER_TEMP/sdl3-build" -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-${ANDROID_API} \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdl3-install" \
-            -DSDL_SHARED=ON \
-            -DSDL_STATIC=OFF \
-            -DSDL_TESTS=OFF \
-            -DSDL_EXAMPLES=OFF
-          "$ANDROID_SDK_ROOT/cmake/3.22.1/bin/cmake" --build "$RUNNER_TEMP/sdl3-build" --target install --parallel 4
+            -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
+          cmake --build "$RUNNER_TEMP/sdl3-build" --target install --parallel 4
           mkdir -p "$RUNNER_TEMP/pkgconfig"
           cat > "$RUNNER_TEMP/pkgconfig/sdl3.pc" <<EOF
 prefix=$RUNNER_TEMP/sdl3-install
 exec_prefix=\${prefix}
 libdir=\${prefix}/lib
 includedir=\${prefix}/include
-
 Name: sdl3
 Description: SDL3
 Version: ${SDL3_VERSION}
 Libs: -L\${libdir} -lSDL3
 Cflags: -I\${includedir}
 EOF
-          cat > "$RUNNER_TEMP/pkgconfig/vulkan.pc" <<EOF
-prefix=$ANDROID_SDK_ROOT/ndk/${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/sysroot
-includedir=\${prefix}/usr/include
+          echo "PKG_CONFIG_PATH=$RUNNER_TEMP/pkgconfig" >> "$GITHUB_ENV"
 
-Name: vulkan
-Description: Android Vulkan headers and platform loader
-Version: 1.3
-Libs: -lvulkan
-Cflags: -I\${includedir}
-EOF
-
-      - name: Prepare DXVK Android cross build
+      - name: Fetch DXVK source needed by the supplied archive build
         shell: bash
+        working-directory: ${{ env.SRC_DIR }}
         run: |
           set -euxo pipefail
-          rm -rf engine/references/fbraz3-dxvk
-          git clone --depth 1 --branch generalsx-macos-v2.6 https://github.com/fbraz3/dxvk.git engine/references/fbraz3-dxvk
-          export DXVK_SRC="$GITHUB_WORKSPACE/engine/references/fbraz3-dxvk"
-          export NDK_BIN="$ANDROID_SDK_ROOT/ndk/${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          export NDK_SYSROOT="$ANDROID_SDK_ROOT/ndk/${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          cat > "$RUNNER_TEMP/meson-arm64-android.ini" <<EOF
-[binaries]
-c = '$NDK_BIN/aarch64-linux-android${ANDROID_API}-clang'
-cpp = '$NDK_BIN/aarch64-linux-android${ANDROID_API}-clang++'
-ar = '$NDK_BIN/llvm-ar'
-strip = '$NDK_BIN/llvm-strip'
-pkg-config = '/usr/bin/pkg-config'
+          rm -rf references/fbraz3-dxvk
+          git clone --depth 1 --branch generalsx-macos-v2.6 https://github.com/fbraz3/dxvk.git references/fbraz3-dxvk
+          echo "DXVK_SRC=$PWD/references/fbraz3-dxvk" >> "$GITHUB_ENV"
 
-[properties]
-sys_root = '$NDK_SYSROOT'
-
-[built-in options]
-c_args = ['-DVK_ENABLE_BETA_EXTENSIONS', '-DVK_USE_PLATFORM_ANDROID_KHR']
-cpp_args = ['-DVK_ENABLE_BETA_EXTENSIONS', '-DVK_USE_PLATFORM_ANDROID_KHR']
-
-[host_machine]
-system = 'linux'
-cpu_family = 'aarch64'
-cpu = 'aarch64'
-endian = 'little'
-EOF
-          export PKG_CONFIG_PATH="$RUNNER_TEMP/pkgconfig"
-          meson setup "$RUNNER_TEMP/dxvk-build" "$DXVK_SRC" \
-            --cross-file "$RUNNER_TEMP/meson-arm64-android.ini" \
-            -Ddxvk_native_wsi=sdl3 \
-            -Dbuildtype=release
-          ninja -C "$RUNNER_TEMP/dxvk-build"
-          DXVK_D3D8=$(find "$RUNNER_TEMP/dxvk-build" -type f -name 'libdxvk_d3d8.so*' | head -1)
-          DXVK_D3D9=$(find "$RUNNER_TEMP/dxvk-build" -type f -name 'libdxvk_d3d9.so*' | head -1)
-          test -n "$DXVK_D3D8"
-          test -n "$DXVK_D3D9"
-          readelf -h "$DXVK_D3D8" | grep -q 'AArch64'
-          readelf -h "$DXVK_D3D9" | grep -q 'AArch64'
-          strings "$DXVK_D3D9" | grep -q 'Sdl3WsiDriver'
-          mkdir -p "$GITHUB_WORKSPACE/android/app/libs/arm64-v8a"
-          cp "$DXVK_D3D8" "$GITHUB_WORKSPACE/android/app/libs/arm64-v8a/libdxvk_d3d8.so"
-          cp "$DXVK_D3D9" "$GITHUB_WORKSPACE/android/app/libs/arm64-v8a/libdxvk_d3d9.so"
-          echo "DXVK_SRC=$DXVK_SRC" >> "$GITHUB_ENV"
-          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
-
-      - name: Patch Android-only CMake conditionals from the supplied source
+      - name: Apply CI-only Android build fixes inside extracted archive
         shell: bash
+        working-directory: ${{ env.SRC_DIR }}
         run: |
           set -euxo pipefail
           python3 - <<'PY'
@@ -180,7 +142,7 @@ EOF
           dx8 = Path('engine/cmake/dx8.cmake')
           text = dx8.read_text()
           marker = 'elseif(APPLE AND SAGE_USE_MOLTENVK)'
-          android_branch = '''elseif(ANDROID)\n  # Android: DXVK is cross-built by CI with Meson before the engine build.\n  # The engine only needs DXVK headers here; the APK packages the resulting .so files.\n  set(DXVK_SOURCE_DIR "$ENV{DXVK_SRC}" CACHE PATH "DXVK native Android source")\n  if(NOT DXVK_SOURCE_DIR OR NOT EXISTS "${DXVK_SOURCE_DIR}/include/native")\n    message(FATAL_ERROR "Android DXVK source not found. DXVK_SRC must point to a checkout containing include/native.")\n  endif()\n  set(dxvk_SOURCE_DIR "${DXVK_SOURCE_DIR}" CACHE PATH "DXVK native Android source")\n  message(STATUS "Using prebuilt Android DXVK from ${DXVK_SOURCE_DIR}")\n\n'''
+          android_branch = '''elseif(ANDROID)\n  set(DXVK_SOURCE_DIR "$ENV{DXVK_SRC}" CACHE PATH "DXVK native Android source")\n  if(NOT DXVK_SOURCE_DIR OR NOT EXISTS "${DXVK_SOURCE_DIR}/include/native")\n    message(FATAL_ERROR "Android DXVK source not found")\n  endif()\n  set(dxvk_SOURCE_DIR "${DXVK_SOURCE_DIR}" CACHE PATH "DXVK native Android source")\n  message(STATUS "Using prebuilt Android DXVK source: ${DXVK_SOURCE_DIR}")\n\n'''
           if 'elseif(ANDROID)' not in text:
               text = text.replace(marker, android_branch + marker, 1)
               dx8.write_text(text)
@@ -189,22 +151,22 @@ EOF
           text = w.read_text()
           text = text.replace('    find_package(Fontconfig REQUIRED)\n', '    if(NOT ANDROID)\n        find_package(Fontconfig REQUIRED)\n    endif()\n')
           text = text.replace('    find_package(Iconv REQUIRED)\n', '    if(NOT ANDROID)\n        find_package(Iconv REQUIRED)\n    endif()\n')
-          text = text.replace('    $<$<PLATFORM_ID:Android>:Fontconfig::Fontconfig>\n', '')
-          text = text.replace('    $<$<PLATFORM_ID:Android>:Iconv::Iconv>\n', '')
           w.write_text(text)
           PY
 
-      - name: Configure and build Generals Zero Hour engine
+      - name: Configure engine from extracted archive
         shell: bash
+        working-directory: ${{ env.SRC_DIR }}
         run: |
           set -euxo pipefail
-          cmake -S engine -B build/android-arm64 -G Ninja \
+          cmake -S engine -B engine/build/android-arm64 -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$ANDROID_SDK_ROOT/ndk/${ANDROID_NDK}/build/cmake/android.toolchain.cmake" \
+            -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
             -DVCPKG_TARGET_TRIPLET=arm64-android \
             -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED" \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-${ANDROID_API} \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/sdl3-install" \
             -DCMAKE_BUILD_TYPE=Release \
             -DSAGE_USE_DX8=OFF \
             -DSAGE_USE_SDL3=ON \
@@ -216,31 +178,35 @@ EOF
             -DRTS_BUILD_CORE_TOOLS=OFF \
             -DRTS_BUILD_GENERALS=OFF \
             -DRTS_BUILD_ZEROHOUR=ON
-          cmake --build build/android-arm64 --target z_generals --parallel 4
 
-      - name: Stage native Android libraries
+      - name: Build z_generals from extracted archive
         shell: bash
+        working-directory: ${{ env.SRC_DIR }}
         run: |
           set -euxo pipefail
-          LIBDIR="$GITHUB_WORKSPACE/android/app/libs/arm64-v8a"
+          cmake --build engine/build/android-arm64 --target z_generals --parallel 4
+
+      - name: Stage native Android libraries in extracted archive
+        shell: bash
+        working-directory: ${{ env.SRC_DIR }}
+        run: |
+          set -euxo pipefail
+          LIBDIR="$PWD/android/app/libs/arm64-v8a"
           mkdir -p "$LIBDIR"
-          MAIN=$(find build/android-arm64 -type f -name 'libmain.so' | head -1)
-          SDL=$(find build/android-arm64 -type f -name 'libSDL3.so' | head -1)
-          SDLI=$(find build/android-arm64 -type f -name 'libSDL3_image.so' | head -1)
-          OPENAL=$(find build/android-arm64 -type f -name 'libopenal.so*' | head -1)
+          MAIN=$(find engine/build/android-arm64 -type f -name 'libmain.so' | head -1)
           test -n "$MAIN"
-          test -n "$SDL"
-          test -n "$OPENAL"
           cp "$MAIN" "$LIBDIR/libmain.so"
+          SDL=$(find "$RUNNER_TEMP/sdl3-install" -type f -name 'libSDL3.so' | head -1)
+          test -n "$SDL"
           cp "$SDL" "$LIBDIR/libSDL3.so"
-          if [ -n "$SDLI" ]; then cp "$SDLI" "$LIBDIR/libSDL3_image.so"; fi
-          cp "$OPENAL" "$LIBDIR/libopenal.so"
+          if [ -f "$DXVK_SRC/../dxvk-build/src/d3d8/libdxvk_d3d8.so" ]; then cp "$DXVK_SRC/../dxvk-build/src/d3d8/libdxvk_d3d8.so" "$LIBDIR/"; fi
+          if [ -f "$DXVK_SRC/../dxvk-build/src/d3d9/libdxvk_d3d9.so" ]; then cp "$DXVK_SRC/../dxvk-build/src/d3d9/libdxvk_d3d9.so" "$LIBDIR/"; fi
           find "$LIBDIR" -maxdepth 1 -type f -name '*.so' -print
           for f in "$LIBDIR"/*.so; do readelf -h "$f" | grep -q 'AArch64'; done
 
-      - name: Assemble APK
-        working-directory: android
+      - name: Assemble APK from extracted archive
         shell: bash
+        working-directory: ${{ env.SRC_DIR }}/android
         run: |
           set -euxo pipefail
           chmod +x ./gradlew
@@ -248,6 +214,7 @@ EOF
 
       - name: Verify APK
         shell: bash
+        working-directory: ${{ env.SRC_DIR }}
         run: |
           set -euxo pipefail
           APK="android/app/build/outputs/apk/debug/app-debug.apk"
@@ -259,6 +226,6 @@ EOF
         uses: actions/upload-artifact@v4
         with:
           name: CnC-Generals-ZeroHour-Android-arm64-debug
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ env.SRC_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
