@@ -1,0 +1,93 @@
+name: Build Mali BCn Layer
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/mali-bcn-layer
+    paths:
+      - .github/workflows/mali-bcn-build.yml
+
+permissions:
+  contents: read
+
+env:
+  ANDROID_NDK_VERSION: 27.2.12479018
+  BCN_LAYER_REF: 4f7b9a1a4c0f2b0e0f0b0e8a0f5a0f1d4f0f4b2a
+
+jobs:
+  build-bcn-layer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK and shader tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sdkmanager --install "ndk;${ANDROID_NDK_VERSION}"
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build glslc xxd git
+          echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Cache BCn source and Android build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/bcn-layer
+            ${{ runner.temp }}/bcn-build
+          key: bcn-layer-android-arm64-${{ env.BCN_LAYER_REF }}-${{ hashFiles('.github/workflows/mali-bcn-build.yml') }}
+          restore-keys: |
+            bcn-layer-android-arm64-${{ env.BCN_LAYER_REF }}-
+
+      - name: Fetch BCn layer
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf "$RUNNER_TEMP/bcn-layer"
+          git clone https://github.com/leegao/bcn_layer.git "$RUNNER_TEMP/bcn-layer"
+          cd "$RUNNER_TEMP/bcn-layer"
+          git checkout "$BCN_LAYER_REF"
+          git submodule update --init --recursive
+
+      - name: Configure BCn layer for arm64 Android
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S "$RUNNER_TEMP/bcn-layer" -B "$RUNNER_TEMP/bcn-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-28 \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/bcn-install" \
+            -DOUT_NAME=bcn_layer
+
+      - name: Build BCn layer
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build "$RUNNER_TEMP/bcn-build" -j2
+          test -f "$RUNNER_TEMP/bcn-build/libbcn_layer.so"
+
+      - name: Stage BCn layer artifacts
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/bcn-artifact/arm64-v8a"
+          cp "$RUNNER_TEMP/bcn-build/libbcn_layer.so" "$RUNNER_TEMP/bcn-artifact/arm64-v8a/"
+          cp "$RUNNER_TEMP/bcn-build/libbcn_layer.json" "$RUNNER_TEMP/bcn-artifact/"
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -h "$RUNNER_TEMP/bcn-artifact/arm64-v8a/libbcn_layer.so" | grep -q 'AArch64'
+          cat "$RUNNER_TEMP/bcn-artifact/libbcn_layer.json"
+
+      - name: Upload BCn layer
+        uses: actions/upload-artifact@v4
+        with:
+          name: bcn-layer-android-arm64
+          path: ${{ runner.temp }}/bcn-artifact
+          if-no-files-found: error
+          retention-days: 14
