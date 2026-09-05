@@ -13,7 +13,7 @@ permissions:
 
 env:
   ANDROID_NDK_VERSION: 27.2.12479018
-  BCN_LAYER_REF: 4f7b9a1a4c0f2b0e0f0b0e8a0f5a0f1d4f0f4b2a
+  BCN_LAYER_REF: 50993a2d51772567de9c36de4d523652773f0899
 
 jobs:
   build-bcn-layer:
