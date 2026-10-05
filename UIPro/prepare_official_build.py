@@ -88,12 +88,21 @@ def prepare_menu_tree(
     source: Path,
     destination: Path,
     expected_count: int,
+    fill_missing_from_original: bool = False,
 ) -> int:
     # Keep the official tree layout intact. Control Bar Pro deliberately has only
     # its high-resolution edited menus in GameFilesEdited, while the full language
     # tree carries all menu WNDs. Do not copy 800x600 originals into GameFilesEdited:
     # the official 1080 build scales that tree by 0.5.
     menu_dir = destination / "Window" / "Menus"
+
+    if fill_missing_from_original:
+        original_dir = source / "GameFilesOriginal" / "Window" / "Menus"
+        for original in sorted(original_dir.glob(MENU_GLOB)):
+            target = menu_dir / original.name
+            if not target.exists():
+                shutil.copy2(original, target)
+
     menu_files = sorted(menu_dir.glob(MENU_GLOB))
 
     if len(menu_files) != expected_count:
@@ -153,7 +162,12 @@ def main() -> None:
     # Mirror the official Control Bar Pro split: 10 high-resolution edited menus in
     # GameFilesEdited, all 37 menus in GameFilesEditedLanguage.
     n1 = prepare_menu_tree(source, dest / "GameFilesEdited", expected_count=10)
-    n2 = prepare_menu_tree(source, dest / "GameFilesEditedLanguage", expected_count=37)
+    n2 = prepare_menu_tree(
+        source,
+        dest / "GameFilesEditedLanguage",
+        expected_count=37,
+        fill_missing_from_original=True,
+    )
 
     print(f"Prepared official source tree: {n1} themed menu WNDs in GameFilesEdited")
     print(f"Prepared official language tree: {n2} themed menu WNDs in GameFilesEditedLanguage")
