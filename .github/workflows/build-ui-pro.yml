@@ -1,4 +1,4 @@
-name: Build Generals UI Pro BIG
+name: Build Generals UI Pro All Menus
 
 on:
   push:
@@ -20,7 +20,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Checkout Control Bar Pro source
+      - name: Checkout Control Bar Pro menu source
         uses: actions/checkout@v4
         with:
           repository: TheSuperHackers/GeneralsControlBar
@@ -29,36 +29,36 @@ jobs:
           fetch-depth: 1
           sparse-checkout: |
             ControlBarProZH/GameFilesOriginal/Window/Menus
-            ControlBarProZH/GameFilesEdited
-            ControlBarProZH/GameFilesEditedLanguage
+            ControlBarProZH/GameFilesEdited/Window/Menus
           sparse-checkout-cone-mode: false
 
-      - name: Prepare Control Bar Pro textures
+      - name: Build all-menu WND BIG
         run: |
-          set -e
-          if command -v magick >/dev/null 2>&1; then
-            IM=magick
-          elif command -v convert >/dev/null 2>&1; then
-            IM=convert
-          else
-            sudo apt-get update
-            sudo apt-get install -y imagemagick
-            IM=convert
-          fi
-          echo "Using ImageMagick command: $IM"
-          rm -rf UIPro/_art
-          mkdir -p UIPro/_art/Art/Textures
-          for f in _controlbar_source/ControlBarProZH/GameFilesEdited/Art/Textures/*.psd; do
-            [ -f "$f" ] || continue
-            base="$(basename "$f" .psd)"
-            "$IM" "$f" -flatten "UIPro/_art/Art/Textures/$base.tga"
-          done
-          cp _controlbar_source/ControlBarProZH/GameFilesEdited/Art/Textures/BlankTexture_16.tga UIPro/_art/Art/Textures/
-
-      - name: Build BIG
-        run: |
-          python3 UIPro/build_menu_big.py             --original "_controlbar_source/ControlBarProZH/GameFilesOriginal/Window/Menus"             --edited "_controlbar_source/ControlBarProZH/GameFilesEdited"             --edited-language "_controlbar_source/ControlBarProZH/GameFilesEditedLanguage"             --art "UIPro/_art"             --output "UIPro/Release/000_UIProAllMenusZH.big"
+          python3 UIPro/build_menu_big.py             --original "_controlbar_source/ControlBarProZH/GameFilesOriginal/Window/Menus"             --edited "_controlbar_source/ControlBarProZH/GameFilesEdited/Window/Menus"             --output "UIPro/Release/000_UIProAllMenusZH.big"
           sha256sum UIPro/Release/000_UIProAllMenusZH.big > UIPro/Release/000_UIProAllMenusZH.big.sha256
+
+      - name: Verify BIG structure
+        run: |
+          python3 - <<'PY'
+          import struct
+          from pathlib import Path
+          p = Path("UIPro/Release/000_UIProAllMenusZH.big")
+          b = p.read_bytes()
+          assert b[:4] == b"BIGF", b[:4]
+          count = struct.unpack(">I", b[8:12])[0]
+          assert count == 37, count
+          off = struct.unpack(">I", b[12:16])[0]
+          i = 16
+          names = []
+          for _ in range(count):
+              i += 8
+              end = b.index(b"\0", i)
+              names.append(b[i:end].decode("ascii"))
+              i = end + 1
+          assert all(x.startswith("Window/Menus/") for x in names)
+          assert len(set(names)) == 37
+          print("Verified BIG header and 37 Window/Menus entries")
+          PY
 
       - name: Upload BIG artifact
         uses: actions/upload-artifact@v4
@@ -78,5 +78,5 @@ jobs:
             echo "No output change."
             exit 0
           fi
-          git commit -m "Build complete functional UI Pro BIG"
+          git commit -m "Build themed all-menu BIG"
           git push origin HEAD:ui-pro
