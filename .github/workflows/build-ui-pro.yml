@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
 
     steps:
       - name: Checkout this repository
@@ -20,63 +20,90 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Checkout Control Bar Pro menu source
+      - name: Checkout official Control Bar Pro source
         uses: actions/checkout@v4
         with:
           repository: TheSuperHackers/GeneralsControlBar
           ref: main
           path: _controlbar_source
           fetch-depth: 1
-          sparse-checkout: |
-            ControlBarProZH/GameFilesOriginal/Window/Menus
-            ControlBarProZH/GameFilesEdited/Window/Menus
-          sparse-checkout-cone-mode: false
 
-      - name: Build all-menu WND BIG
+      - name: Prepare official ModBuilder project
+        shell: pwsh
         run: |
-          python3 UIPro/build_menu_big.py             --original "_controlbar_source/ControlBarProZH/GameFilesOriginal/Window/Menus"             --edited "_controlbar_source/ControlBarProZH/GameFilesEdited/Window/Menus"             --output "UIPro/Release/000_UIProAllMenusZH.big"
-          sha256sum UIPro/Release/000_UIProAllMenusZH.big > UIPro/Release/000_UIProAllMenusZH.big.sha256
+          python "$env:GITHUB_WORKSPACE/UIPro/prepare_official_build.py" --source "$env:GITHUB_WORKSPACE/_controlbar_source/ControlBarProZH" --dest "$env:GITHUB_WORKSPACE/UIPro/OfficialBuild"
 
-      - name: Verify BIG structure
+      - name: Verify all 37 source menus were themed
+        shell: pwsh
         run: |
-          python3 - <<'PY'
-          import struct
-          from pathlib import Path
-          p = Path("UIPro/Release/000_UIProAllMenusZH.big")
-          b = p.read_bytes()
-          assert b[:4] == b"BIGF", b[:4]
-          count = struct.unpack(">I", b[8:12])[0]
-          assert count == 37, count
-          off = struct.unpack(">I", b[12:16])[0]
-          i = 16
-          names = []
-          for _ in range(count):
-              i += 8
-              end = b.index(b"\0", i)
-              names.append(b[i:end].decode("ascii"))
-              i = end + 1
-          assert all(x.startswith("Window/Menus/") for x in names)
-          assert len(set(names)) == 37
-          print("Verified BIG header and 37 Window/Menus entries")
-          PY
+          $a = @(Get-ChildItem "$env:GITHUB_WORKSPACE/UIPro/OfficialBuild/GameFilesEdited/Window/Menus" -Filter *.wnd)
+          $b = @(Get-ChildItem "$env:GITHUB_WORKSPACE/UIPro/OfficialBuild/GameFilesEditedLanguage/Window/Menus" -Filter *.wnd)
+          if ($a.Count -ne 37) { throw "GameFilesEdited menu count is $($a.Count), expected 37" }
+          if ($b.Count -ne 37) { throw "GameFilesEditedLanguage menu count is $($b.Count), expected 37" }
+          Write-Host "Verified 37 themed menus in both official source trees."
 
-      - name: Upload BIG artifact
+      - name: Install the exact ModBuilder used by Control Bar Pro
+        shell: cmd
+        run: |
+          call "%GITHUB_WORKSPACE%\_controlbar_source\ControlBarProZH\Scripts\Windows\InstallModBuilder.bat"
+          if errorlevel 1 exit /b %errorlevel%
+
+      - name: Build release with official ModBuilder
+        shell: cmd
+        run: |
+          call "%GITHUB_WORKSPACE%\_controlbar_source\ControlBarProZH\Scripts\Windows\Setup.bat"
+          if errorlevel 1 exit /b %errorlevel%
+          "%ModBuilderExe%" --build --release --verbose-logging --config-list "%GITHUB_WORKSPACE%\UIPro\OfficialBuild\ModBundleItems.json" "%GITHUB_WORKSPACE%\UIPro\OfficialBuild\ModBundlePacks.json" "%GITHUB_WORKSPACE%\UIPro\OfficialBuild\ModFolders.json"
+          if errorlevel 1 exit /b %errorlevel%
+
+      - name: Verify official BIG/ZIP release output
+        shell: pwsh
+        run: |
+          $release = "$env:GITHUB_WORKSPACE/UIPro/OfficialBuild/.Release"
+          if (-not (Test-Path $release)) { throw "Missing ModBuilder release directory: $release" }
+          $bigs = @(Get-ChildItem $release -Filter *.big)
+          if ($bigs.Count -ne 4) { throw "Expected 4 BIG files from the 1080 official-style pack, found $($bigs.Count)" }
+          $expected = @("340_UIProCore.big", "340_UIProData1080.big", "340_UIProLanguage1080.big", "340_UIProArt1080.big")
+          foreach ($name in $expected) { if (-not (Test-Path (Join-Path $release $name))) { throw "Missing expected release file $name" } }
+          $zip = @(Get-ChildItem $release -Filter *.zip)
+          if ($zip.Count -ne 1) { throw "Expected one pack ZIP, found $($zip.Count)" }
+          python "$env:GITHUB_WORKSPACE/UIPro/verify_big_release.py" --release "$release"
+          Write-Host "Official ModBuilder release verification passed."
+
+      - name: Stage release files
+        shell: pwsh
+        run: |
+          $source = "$env:GITHUB_WORKSPACE/UIPro/OfficialBuild/.Release"
+          $dest = "$env:GITHUB_WORKSPACE/UIPro/Release"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          Get-ChildItem $dest -File | Remove-Item -Force
+          Copy-Item "$source/*.big" $dest -Force
+          Copy-Item "$source/*.zip" $dest -Force
+          foreach ($file in Get-ChildItem $dest -File) {
+            $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($file.Name)" | Set-Content -NoNewline -Encoding ascii "$($file.FullName).sha256"
+          }
+
+      - name: Upload official release artifact
         uses: actions/upload-artifact@v4
         with:
-          name: GeneralsUIPro-AllMenus
+          name: GeneralsUIPro-OfficialModBuilder-1080
           path: |
-            UIPro/Release/000_UIProAllMenusZH.big
-            UIPro/Release/000_UIProAllMenusZH.big.sha256
+            UIPro/Release/*.big
+            UIPro/Release/*.zip
+            UIPro/Release/*.sha256
           if-no-files-found: error
 
-      - name: Commit BIG into ui-pro
+      - name: Commit release files into ui-pro
+        shell: cmd
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f UIPro/Release/000_UIProAllMenusZH.big UIPro/Release/000_UIProAllMenusZH.big.sha256
-          if git diff --cached --quiet; then
-            echo "No output change."
-            exit 0
-          fi
-          git commit -m "Build themed all-menu BIG"
+          git add -f UIPro/Release/
+          git add UIPro/OfficialBuild/ModBundleItems.json UIPro/OfficialBuild/ModBundlePacks.json UIPro/OfficialBuild/ModFolders.json UIPro/prepare_official_build.py .github/workflows/build-ui-pro.yml
+          git rm -f --ignore-unmatch UIPro/build_menu_big.py
+          git diff --cached --quiet
+          if not errorlevel 1 exit /b 0
+          git commit -m "Build UI Pro with official Generals Mod Builder"
+          if errorlevel 1 exit /b %errorlevel%
           git push origin HEAD:ui-pro
