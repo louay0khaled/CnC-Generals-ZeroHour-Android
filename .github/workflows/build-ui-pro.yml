@@ -48,12 +48,22 @@ jobs:
           call "%GITHUB_WORKSPACE%\_controlbar_source\ControlBarProZH\Scripts\Windows\InstallModBuilder.bat"
           if errorlevel 1 exit /b %errorlevel%
 
+      - name: Create CI-only game runner override
+        shell: pwsh
+        run: |
+          $game = "$env:GITHUB_WORKSPACE/UIPro/OfficialBuild/CI_Game"
+          New-Item -ItemType Directory -Force -Path $game | Out-Null
+          New-Item -ItemType File -Force -Path "$game/generals.exe" | Out-Null
+          @'
+{"runner":{"version":1,"gameInstallPath":"CI_Game","gameExeFile":"generals.exe","gameExeArgs":{"-win":"","-quickstart":""}}}
+'@ | Set-Content -Encoding ascii "$env:GITHUB_WORKSPACE/UIPro/OfficialBuild/CI_ModRunner.json"
+
       - name: Build release with official ModBuilder
         shell: cmd
         run: |
           call "%GITHUB_WORKSPACE%\_controlbar_source\ControlBarProZH\Scripts\Windows\Setup.bat"
           if errorlevel 1 exit /b %errorlevel%
-          "%ModBuilderExe%" --build --release --verbose-logging --config-list "%GITHUB_WORKSPACE%\UIPro\OfficialBuild\ModBundleItems.json" "%GITHUB_WORKSPACE%\UIPro\OfficialBuild\ModBundlePacks.json" "%GITHUB_WORKSPACE%\UIPro\OfficialBuild\ModFolders.json" "%GITHUB_WORKSPACE%\UIPro\OfficialBuild\ModRunner.json"
+          "%ModBuilderExe%" --build --release --verbose-logging --config-list "%GITHUB_WORKSPACE%\UIPro\OfficialBuild\ModBundleItems.json" "%GITHUB_WORKSPACE%\UIPro\OfficialBuild\ModBundlePacks.json" "%GITHUB_WORKSPACE%\UIPro\OfficialBuild\ModFolders.json" "%GITHUB_WORKSPACE%\UIPro\OfficialBuild\ModRunner.json" "%GITHUB_WORKSPACE%\UIPro\OfficialBuild\CI_ModRunner.json"
           if errorlevel 1 exit /b %errorlevel%
 
       - name: Verify official BIG/ZIP release output
