@@ -87,44 +87,33 @@ def theme_wnd(text: str) -> str:
 def prepare_menu_tree(
     source: Path,
     destination: Path,
-    original_subdir: str,
-    edited_subdir: str,
+    expected_count: int,
 ) -> int:
-    original_dir = source / original_subdir
-    edited_dir = source / edited_subdir
+    # Keep the official tree layout intact. Control Bar Pro deliberately has only
+    # its high-resolution edited menus in GameFilesEdited, while the full language
+    # tree carries all menu WNDs. Do not copy 800x600 originals into GameFilesEdited:
+    # the official 1080 build scales that tree by 0.5.
+    menu_dir = destination / "Window" / "Menus"
+    menu_files = sorted(menu_dir.glob(MENU_GLOB))
 
-    destination.parent.mkdir(parents=True, exist_ok=True)
-
-    # Start from the official edited tree; it contains the assets that Control Bar Pro
-    # actually ships. Then fill missing menus from the official originals so all 37
-    # menu files are present.
-    if destination.exists():
-        shutil.rmtree(destination)
-    shutil.copytree(edited_dir, destination)
-
-    for original in sorted((original_dir / "Window" / "Menus").glob(MENU_GLOB)):
-        target = destination / "Window" / "Menus" / original.name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if not target.exists():
-            shutil.copy2(original, target)
-
-    menu_files = sorted((destination / "Window" / "Menus").glob(MENU_GLOB))
-    if len(menu_files) != 37:
+    if len(menu_files) != expected_count:
         raise SystemExit(
-            f"{edited_subdir}: expected exactly 37 menu WND files after merge, found {len(menu_files)}"
+            f"{destination.name}: expected exactly {expected_count} official menu WND files, "
+            f"found {len(menu_files)}"
         )
 
     changed = 0
     for path in menu_files:
         raw = path.read_text(encoding="utf-8")
         themed = theme_wnd(raw)
-        path.write_text(themed.replace("\r\n", "\n"), encoding="utf-8", newline="\r\n")
+        path.write_text(themed.replace("\\r\\n", "\\n"), encoding="utf-8", newline="\\r\\n")
         if themed != raw:
             changed += 1
 
-    if changed != 37:
+    if changed != expected_count:
         raise SystemExit(
-            f"{edited_subdir}: expected all 37 menu files to change, only {changed} changed"
+            f"{destination.name}: expected all {expected_count} menu files to change, "
+            f"only {changed} changed"
         )
 
     return len(menu_files)
@@ -161,20 +150,10 @@ def main() -> None:
 
     shutil.copytree(source / "Scripts", dest / "Scripts")
 
-    # Fill and theme both WND sets. This matters because the official 1080 pack has a
-    # data-position BIG and a language/font BIG, both of which contain Window/Menus.
-    n1 = prepare_menu_tree(
-        source,
-        dest / "GameFilesEdited",
-        "GameFilesOriginal",
-        "GameFilesEdited",
-    )
-    n2 = prepare_menu_tree(
-        source,
-        dest / "GameFilesEditedLanguage",
-        "GameFilesOriginal",
-        "GameFilesEditedLanguage",
-    )
+    # Mirror the official Control Bar Pro split: 10 high-resolution edited menus in
+    # GameFilesEdited, all 37 menus in GameFilesEditedLanguage.
+    n1 = prepare_menu_tree(source, dest / "GameFilesEdited", expected_count=10)
+    n2 = prepare_menu_tree(source, dest / "GameFilesEditedLanguage", expected_count=37)
 
     print(f"Prepared official source tree: {n1} themed menu WNDs in GameFilesEdited")
     print(f"Prepared official language tree: {n2} themed menu WNDs in GameFilesEditedLanguage")
