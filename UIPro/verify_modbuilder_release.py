@@ -120,7 +120,7 @@ def verify_big(name: str, data: bytes) -> None:
 
     if name == "340_UIProData1080.big":
         actual = {
-            n.split("/", 3)[-1]
+            Path(n).name
             for n in names
             if n.lower().startswith("window/menus/") and n.lower().endswith(".wnd")
         }
