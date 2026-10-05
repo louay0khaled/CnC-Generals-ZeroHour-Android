@@ -1,0 +1,19 @@
+{
+    "bundles": {
+        "version": 1,
+        "packsPrefix": "UIProAllMenusZH_v1.0_",
+        "packsSuffix": "",
+        "packs": [
+            {
+                "install": true,
+                "name": "1920x1080",
+                "itemNames": [
+                    "340_UIProCore",
+                    "340_UIProData1080",
+                    "340_UIProLanguage1080",
+                    "340_UIProArt1080"
+                ]
+            }
+        ]
+    }
+}
