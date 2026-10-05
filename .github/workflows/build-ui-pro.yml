@@ -26,11 +26,25 @@ jobs:
           repository: TheSuperHackers/GeneralsControlBar
           ref: main
           path: _controlbar_source
+          fetch-depth: 1
+          sparse-checkout: |
+            ControlBarProZH/GameFilesOriginal/Window/Menus
+            ControlBarProZH/GameFilesEdited/Window/Menus
+          sparse-checkout-cone-mode: false
 
       - name: Build BIG
         run: |
           python3 UIPro/build_menu_big.py             --original "_controlbar_source/ControlBarProZH/GameFilesOriginal/Window/Menus"             --edited "_controlbar_source/ControlBarProZH/GameFilesEdited/Window/Menus"             --output "UIPro/Release/340_UIProAllMenusZH.big"
           sha256sum UIPro/Release/GeneralsUIPro_AllMenus.big > UIPro/Release/340_UIProAllMenusZH.big.sha256
+
+      - name: Upload BIG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GeneralsUIPro-AllMenus
+          path: |
+            UIPro/Release/340_UIProAllMenusZH.big
+            UIPro/Release/340_UIProAllMenusZH.big.sha256
+          if-no-files-found: error
 
       - name: Commit BIG into ui-pro
         run: |
