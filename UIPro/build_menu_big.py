@@ -52,7 +52,7 @@ def main():
     for name in names:
         ep=edited/name
         p=ep if ep.exists() else original/name
-        entries.append(("Data/Window/Menus/"+name,p.read_bytes()))
+        entries.append(("Window/Menus/"+name,p.read_bytes()))
     if not entries:
         raise SystemExit("No menu .wnd files found.")
     Path(args.output).parent.mkdir(parents=True,exist_ok=True)
