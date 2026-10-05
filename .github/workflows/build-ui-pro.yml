@@ -72,13 +72,11 @@ jobs:
           $release = "$env:GITHUB_WORKSPACE/UIPro/OfficialBuild/.Release"
           if (-not (Test-Path $release)) { throw "Missing ModBuilder release directory: $release" }
           $bigs = @(Get-ChildItem $release -Filter *.big)
-          if ($bigs.Count -ne 4) { throw "Expected 4 BIG files from the 1080 official-style pack, found $($bigs.Count)" }
-          $expected = @("340_UIProCore.big", "340_UIProData1080.big", "340_UIProLanguage1080.big", "340_UIProArt1080.big")
-          foreach ($name in $expected) { if (-not (Test-Path (Join-Path $release $name))) { throw "Missing expected release file $name" } }
+          if ($bigs.Count -ne 0) { throw "Official ModBuilder release should contain the BIG files inside the pack ZIP, not beside it." }
           $zip = @(Get-ChildItem $release -Filter *.zip)
-          if ($zip.Count -ne 1) { throw "Expected one pack ZIP, found $($zip.Count)" }
-          python "$env:GITHUB_WORKSPACE/UIPro/verify_big_release.py" --release "$release"
-          Write-Host "Official ModBuilder release verification passed."
+          if ($zip.Count -ne 1) { throw "Expected exactly one pack ZIP, found $($zip.Count)" }
+          python "$env:GITHUB_WORKSPACE/UIPro/verify_modbuilder_release.py" --zip $zip[0].FullName
+          Write-Host "Official ModBuilder release ZIP verification passed."
 
       - name: Stage release files
         shell: pwsh
@@ -87,7 +85,6 @@ jobs:
           $dest = "$env:GITHUB_WORKSPACE/UIPro/Release"
           New-Item -ItemType Directory -Force -Path $dest | Out-Null
           Get-ChildItem $dest -File | Remove-Item -Force
-          Copy-Item "$source/*.big" $dest -Force
           Copy-Item "$source/*.zip" $dest -Force
           foreach ($file in Get-ChildItem $dest -File) {
             $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLower()
