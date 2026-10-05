@@ -36,16 +36,22 @@ jobs:
       - name: Prepare Control Bar Pro textures
         run: |
           set -e
-          if ! command -v magick >/dev/null 2>&1; then
+          if command -v magick >/dev/null 2>&1; then
+            IM=magick
+          elif command -v convert >/dev/null 2>&1; then
+            IM=convert
+          else
             sudo apt-get update
             sudo apt-get install -y imagemagick
+            IM=convert
           fi
+          echo "Using ImageMagick command: $IM"
           rm -rf UIPro/_art
           mkdir -p UIPro/_art/Art/Textures
           for f in _controlbar_source/ControlBarProZH/GameFilesEdited/Art/Textures/*.psd; do
             [ -f "$f" ] || continue
             base="$(basename "$f" .psd)"
-            magick "$f" -flatten "UIPro/_art/Art/Textures/$base.tga"
+            "$IM" "$f" -flatten "UIPro/_art/Art/Textures/$base.tga"
           done
           cp _controlbar_source/ControlBarProZH/GameFilesEdited/Art/Textures/BlankTexture_16.tga UIPro/_art/Art/Textures/
 
