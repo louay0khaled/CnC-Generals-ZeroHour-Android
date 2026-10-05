@@ -22,3 +22,6 @@ https://github.com/TheSuperHackers/GeneralsControlBar
 
 ## ملاحظة
 هذا الإصدار هو حزمة القوائم/النوافذ. مرحلة التصميم الجديدة للهواتف (Touch UI، أحجام الأزرار، الخطوط، الألوان، RTL وغيرها) تُبنى فوق هذه الطبقة لاحقاً.
+
+
+Build workflow fix applied: BIG files are force-added because the parent project ignores `*.big`.
