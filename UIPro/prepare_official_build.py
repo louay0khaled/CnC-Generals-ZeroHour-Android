@@ -115,7 +115,7 @@ def prepare_menu_tree(
     for path in menu_files:
         raw = path.read_text(encoding="utf-8")
         themed = theme_wnd(raw)
-        path.write_text(themed.replace("\\r\\n", "\\n"), encoding="utf-8", newline="\\r\\n")
+        path.write_text(themed.replace("\\r\\n", "\\n").replace("\\r", "\\n"), encoding="utf-8")
         if themed != raw:
             changed += 1
 
