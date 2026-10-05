@@ -41,6 +41,8 @@ EXPECTED_LANGUAGE_MENUS = {
     "WOLQuickMatchMenu.wnd",
     "WOLStatusMenu.wnd",
     "WOLWelcomeMenu.wnd",
+    "NetworkDirectConnect.wnd",
+    "OptionsMenu.wnd",
     "Defeat.wnd",
     "DisconnectScreen.wnd",
     "LocalDefeat.wnd",
