@@ -1,0 +1,11 @@
+{
+  "project": "Generals UI Pro",
+  "bundle": "GeneralsUIPro_AllMenus.big",
+  "source_repository": "TheSuperHackers/GeneralsControlBar",
+  "source_path_original": "ControlBarProZH/GameFilesOriginal/Window/Menus",
+  "source_path_edited": "ControlBarProZH/GameFilesEdited/Window/Menus",
+  "edited_override_rule": "Use GameFilesEdited file when a same-named file exists; otherwise use GameFilesOriginal.",
+  "current_menu_count": 37,
+  "edited_override_count": 10,
+  "output_root": "Data/Window/Menus"
+}
