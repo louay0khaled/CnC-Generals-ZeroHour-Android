@@ -55,8 +55,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path $game | Out-Null
           New-Item -ItemType File -Force -Path "$game/generals.exe" | Out-Null
           @'
-{"runner":{"version":1,"gameInstallPath":"CI_Game","gameExeFile":"generals.exe","gameExeArgs":{"-win":"","-quickstart":""}}}
-'@ | Set-Content -Encoding ascii "$env:GITHUB_WORKSPACE/UIPro/OfficialBuild/CI_ModRunner.json"
+          {"runner":{"version":1,"gameInstallPath":"CI_Game","gameExeFile":"generals.exe","gameExeArgs":{"-win":"","-quickstart":""}}}
+          '@ | Set-Content -Encoding ascii "$env:GITHUB_WORKSPACE/UIPro/OfficialBuild/CI_ModRunner.json"
 
       - name: Build release with official ModBuilder
         shell: cmd
