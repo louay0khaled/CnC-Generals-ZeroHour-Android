@@ -38,9 +38,9 @@ jobs:
         run: |
           $a = @(Get-ChildItem "$env:GITHUB_WORKSPACE/UIPro/OfficialBuild/GameFilesEdited/Window/Menus" -Filter *.wnd)
           $b = @(Get-ChildItem "$env:GITHUB_WORKSPACE/UIPro/OfficialBuild/GameFilesEditedLanguage/Window/Menus" -Filter *.wnd)
-          if ($a.Count -ne 37) { throw "GameFilesEdited menu count is $($a.Count), expected 37" }
+          if ($a.Count -ne 10) { throw "GameFilesEdited menu count is $($a.Count), expected 10 (official high-resolution set)" }
           if ($b.Count -ne 37) { throw "GameFilesEditedLanguage menu count is $($b.Count), expected 37" }
-          Write-Host "Verified 37 themed menus in both official source trees."
+          Write-Host "Verified official menu split: 10 high-resolution edited menus + 37 language menus."
 
       - name: Install the exact ModBuilder used by Control Bar Pro
         shell: cmd
