@@ -76,11 +76,11 @@ def theme_wnd(text: str) -> str:
         out.append(line)
 
     themed = "".join(out)
-    if themed == original:
-        # Some tiny overlay-only windows do not contain the properties above.
-        # A harmless comment still gives the file a tracked, deterministic UI-Pro revision.
-        suffix = "" if themed.endswith("\n") else "\n"
-        themed += suffix + "; UIProAllMenusZH themed by official ModBuilder pipeline\n"
+    # Deterministic marker in every menu WND lets CI prove that every intended menu
+    # passed through our theme transformation, including source files that had no
+    # color/font property matching the theme rules.
+    normalized = themed.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n")
+    themed = normalized + "\n; UIProAllMenusZH themed by official ModBuilder pipeline\n"
     return themed
 
 
