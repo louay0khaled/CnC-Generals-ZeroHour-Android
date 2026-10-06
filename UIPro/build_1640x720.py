@@ -950,7 +950,7 @@ def make_background_marker_transparent(work_root: Path) -> None:
     text = read_text(path)
     text = re.sub(
         r'(?s)(NAME\s*=\s*"ControlBar\.wnd:BackgroundMarker";.*?DRAWCALLBACK\s*=\s*)"[^"]+";',
-        r'\1"W3DNoDraw";',
+        r'\1"[None]";',
         text,
         count=1,
     )
