@@ -784,7 +784,6 @@ def copy_controlbar_data(cb_root: Path, work: Path) -> None:
         "Data/INI/*.ini",
         "Data/INI/MappedImages/HandCreated/*.ini",
         "Window/*.wnd",
-        "Window/Menus/*.wnd",
     ])
     copy_glob(lang, work, [
         "Data/Brazilian/*.ini",
@@ -796,7 +795,6 @@ def copy_controlbar_data(cb_root: Path, work: Path) -> None:
         "Data/Korean/*.ini",
         "Data/Polish/*.ini",
         "Data/Spanish/*.ini",
-        "Window/Menus/*.wnd",
     ])
 
 
