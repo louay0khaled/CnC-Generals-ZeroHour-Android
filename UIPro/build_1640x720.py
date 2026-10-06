@@ -165,6 +165,16 @@ def transform_main_rect(
     return even_int(nx1), even_int(ny1), even_int(nx2), even_int(ny2)
 
 
+def validate_wnd_resolutions(text: str, label: str) -> None:
+    # Every WND SCREENRECT must end with a syntactically valid CREATIONRESOLUTION.
+    bad = re.findall(r"CREATIONRESOLUTION:\\s*([^;\\r\\n]+)", text)
+    invalid = [value.strip() for value in bad if value.strip() != f"{WIDTH} {HEIGHT}"]
+    if invalid:
+        raise ValueError(f"{label}: invalid CREATIONRESOLUTION values: {invalid[:5]}")
+    if "CREATIONRESOLUTION" in text and not re.search(r"CREATIONRESOLUTION:\\s*1640\\s+720;", text):
+        raise ValueError(f"{label}: malformed CREATIONRESOLUTION syntax")
+
+
 def replace_screenrect(
     header: str,
     rect_transform,
@@ -182,7 +192,7 @@ def replace_screenrect(
         return (
             f"{m.group(1)}{nx1} {ny1}"
             f"{m.group(4)}{nx2} {ny2}"
-            f"{m.group(7)}{WIDTH} {HEIGHT}{m.group(9)}"
+            f"{m.group(7)}{WIDTH} {HEIGHT}{m.group(10)}"
         )
 
     out, n = pattern.subn(repl, header, count=1)
@@ -394,6 +404,9 @@ def modernize_wnd(
         lines[hs:he] = [header]
 
     out = "".join(lines)
+
+    if mode in ("control", "power", "main"):
+        validate_wnd_resolutions(out, f"WND mode={mode}")
 
     if mode in ("menu", "main"):
         out = re.sub(r"\b47\s+55\s+168\b", "40 140 220", out)
