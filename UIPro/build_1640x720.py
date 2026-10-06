@@ -166,12 +166,13 @@ def transform_main_rect(
 
 
 def validate_wnd_resolutions(text: str, label: str) -> None:
-    # Every WND SCREENRECT must end with a syntactically valid CREATIONRESOLUTION.
-    bad = re.findall(r"CREATIONRESOLUTION:\\s*([^;\\r\\n]+)", text)
-    invalid = [value.strip() for value in bad if value.strip() != f"{WIDTH} {HEIGHT}"]
+    # All transformed WNDs in this package use one explicit creation resolution.
+    values = re.findall(r"CREATIONRESOLUTION:\\s*([^;\\r\\n]+)", text)
+    invalid = [value.strip() for value in values if value.strip() != f"{WIDTH} {HEIGHT}"]
     if invalid:
         raise ValueError(f"{label}: invalid CREATIONRESOLUTION values: {invalid[:5]}")
-    if "CREATIONRESOLUTION" in text and not re.search(r"CREATIONRESOLUTION:\\s*1640\\s+720;", text):
+    malformed = re.findall(r"CREATIONRESOLUTION:[^;\\r\\n]*(?:\\r?\\n|$)", text)
+    if any(not re.search(r"CREATIONRESOLUTION:\\s*1640\\s+720;", item) for item in malformed):
         raise ValueError(f"{label}: malformed CREATIONRESOLUTION syntax")
 
 
@@ -406,6 +407,8 @@ def modernize_wnd(
     out = "".join(lines)
 
     if mode in ("control", "power", "main"):
+        # Normalize any creation-resolution fields that were not paired with a SCREENRECT match.
+        out = re.sub(r"CREATIONRESOLUTION:\\s*-?\\d+\\s+-?\\d+;", f"CREATIONRESOLUTION: {WIDTH} {HEIGHT};", out)
         validate_wnd_resolutions(out, f"WND mode={mode}")
 
     if mode in ("menu", "main"):
