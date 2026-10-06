@@ -308,35 +308,39 @@ def make_flat_button(header: str) -> str:
     if not re.search(r"IMAGE:\s*Buttons", header):
         return header
 
+    # Keep the WND's 9-slice draw-data structure, but replace its artwork with
+    # engine-native NoImage color/border fills. Every slice receives the same
+    # pair so the button remains a complete rectangle at arbitrary sizes.
     header = re.sub(r"\+IMAGE\b", "", header, count=1)
     header = replace_textcolor(header)
 
-    for key, pair in (
-        ("ENABLED", (BUTTON_ENABLED, BUTTON_SELECTED)),
-        ("DISABLED", (BUTTON_DISABLED, BUTTON_DISABLED)),
-        ("HILITED", (BUTTON_HILITE, BUTTON_HILITE_SELECTED)),
-    ):
+    palette = {
+        "ENABLED": BUTTON_ENABLED,
+        "DISABLED": BUTTON_DISABLED,
+        "HILITED": BUTTON_HILITE,
+    }
+
+    for key, pair in palette.items():
         pattern = re.compile(
             rf"(?m)^(\s*){key}DRAWDATA\s*=.*?(?=^\s*[A-Z]+DRAWDATA\s*=|^\s*END\s*$)",
             re.S,
         )
         m = pattern.search(header)
-        if m:
-            indent = m.group(1)
-            lines = []
-            entries = [pair[0], pair[1]] + [TRANSPARENT_DRAW] * 7
-            lines.append(f"{indent}{key}DRAWDATA = ")
-            for idx, (color, border) in enumerate(entries):
-                if idx == 0:
-                    prefix = ""
-                else:
-                    prefix = f"{indent}                  "
-                comma = "," if idx < len(entries) - 1 else ";"
-                lines.append(
-                    f"{prefix}IMAGE: NoImage, COLOR: {color}, BORDERCOLOR: {border}{comma}"
-                )
-            replacement = "\n".join(lines)
-            header = header[:m.start()] + replacement + "\n" + header[m.end():]
+        if not m:
+            continue
+
+        indent = m.group(1)
+        color, border = pair
+        lines = [f"{indent}{key}DRAWDATA = "]
+        for idx in range(9):
+            prefix = "" if idx == 0 else f"{indent}                  "
+            comma = "," if idx < 8 else ";"
+            lines.append(
+                f"{prefix}IMAGE: NoImage, COLOR: {color}, BORDERCOLOR: {border}{comma}"
+            )
+        replacement = "\n".join(lines)
+        header = header[:m.start()] + replacement + "\n" + header[m.end():]
+
     return header
 
 
@@ -958,40 +962,77 @@ def make_background_marker_transparent(work_root: Path) -> None:
     write_text(path, text)
 
 
-def build_commandbar_texture(
+def verify_official_commandbar_texture(official_art_big: Path, texture_name: str) -> tuple[int, int]:
+    """Verify the already-processed official 0.5 command-bar DDS and its alpha."""
+    data = official_art_big.read_bytes()
+    count = struct.unpack_from(">I", data, 8)[0]
+    pos = 16
+    target = texture_name.replace("/", "\\")
+    for _ in range(count):
+        off, size = struct.unpack_from(">II", data, pos)
+        pos += 8
+        end = data.index(b"\\x00", pos)
+        name = data[pos:end].decode("ascii")
+        pos = end + 1
+        if name.lower() == target.lower():
+            from io import BytesIO
+            with Image.open(BytesIO(data[off:off + size])) as im:
+                rgba = im.convert("RGBA")
+                if rgba.size != (2048, 512):
+                    raise ValueError(f"{texture_name}: expected official 2048x512 DDS, got {rgba.size}")
+                alpha = rgba.getchannel("A")
+                if alpha.getextrema()[0] != 0:
+                    raise ValueError(f"{texture_name}: official DDS lost transparency")
+                return rgba.size
+    raise FileNotFoundError(f"Official Art1080 BIG is missing {texture_name}")
+
+
+def build_controlbar_big(
     cb_root: Path,
     work_root: Path,
-    psd_name: str,
-    out_name: str,
-) -> str:
-    try:
-        from psd_tools import PSDImage
-    except ImportError as exc:
-        raise RuntimeError("psd-tools is required for command bar texture generation") from exc
+    out: Path,
+    official_art_big: Path,
+) -> None:
+    copy_controlbar_data(cb_root, work_root)
 
-    psd_path = cb_root / "GameFilesEdited" / "Art" / "Textures" / psd_name
-    if not psd_path.is_file():
-        raise FileNotFoundError(psd_path)
+    controlbar = work_root / "Window" / "ControlBar.wnd"
+    write_text(controlbar, modernize_wnd(read_text(controlbar), mode="control"))
+    make_background_marker_transparent(work_root)
 
-    psd = PSDImage.open(psd_path)
-    image = psd.composite().convert("RGBA")
+    for name in ("GenPowersShortcutBarUS.wnd", "GenPowersShortcutBarChina.wnd", "GenPowersShortcutBarGLA.wnd"):
+        path = work_root / "Window" / name
+        if path.exists():
+            write_text(path, modernize_wnd(read_text(path), mode="power"))
 
-    # Official art is 4096x1024. The Control Bar design uses the 3840x1024 mapped
-    # region; scale it to the requested 1920x512 working texture.
-    image = image.resize((2048, 512), Image.Resampling.BOX)
-    image = image.crop((0, 0, 1920, 512))
+    # Use the official ModBuilder-produced 0.5 textures from Art1080 directly.
+    # They are already correctly resampled and retain transparent alpha around
+    # the three visible control-bar regions. We only change their mapped-image
+    # coordinates; no PSD recompositing is performed.
+    official_command_textures = {
+        "AmericaCommandBarPro.ini": ("AmericaProCommandBar", "Art\\Textures\\AmericaCommandBarPro_4096_1024.dds"),
+        "ChinaCommandBarPro.ini": ("ChinaProCommandBar", "Art\\Textures\\ChinaCommandBarPro_4096_1024.dds"),
+        "GlaCommandBarPro.ini": ("GlaProCommandBar", "Art\\Textures\\GlaCommandBarPro_4096_1024.dds"),
+        "ObsCommandBarPro.ini": ("ObserverProCommandBar", "Art\\Textures\\ObsCommandBarPro_4096_1024.dds"),
+    }
+    for texture in (
+        "Art\\Textures\\AmericaCommandBarPro_4096_1024.dds",
+        "Art\\Textures\\ChinaCommandBarPro_4096_1024.dds",
+        "Art\\Textures\\GlaCommandBarPro_4096_1024.dds",
+        "Art\\Textures\\ObsCommandBarPro_4096_1024.dds",
+    ):
+        verify_official_commandbar_texture(official_art_big, texture)
 
-    # Remove the reserved gaps so transparent regions reveal the game world instead
-    # of the black pixels underneath the artwork.
-    alpha = image.getchannel("A")
-    for left, right in ((340, 592), (1326, 1625)):
-        alpha.paste(0, (left, 0, right, 512))
-    image.putalpha(alpha)
+    scheme = work_root / "Data" / "INI" / "ControlBarScheme.ini"
+    write_text(scheme, transform_scheme(read_text(scheme)))
 
-    out_path = work_root / "Art" / "Textures" / out_name
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    image.save(out_path, format="TGA")
-    return out_name
+    hand = work_root / "Data" / "INI" / "MappedImages" / "HandCreated"
+    for filename, (base_name, texture) in official_command_textures.items():
+        path = hand / filename
+        if path.exists():
+            rewrite_commandbar_mapping(path, base_name, texture)
+
+    apply_official_font_scaling(cb_root, work_root)
+    pack_big(work_root, out)
 
 
 def build_controlbar_big(cb_root: Path, work_root: Path, out: Path) -> None:
@@ -1051,9 +1092,7 @@ def make_readme(path: Path) -> None:
 - 340_ControlBarProArt1080ZH.big       : ملفات Art الرسمية بدون تعديل.
 - 340_ControlBarPro1640x720ZH.big      : Control Bar Pro معدل فعليًا إلى 1640x720.
 - 340_ControlBarPro0_MenusZH.big       : إعادة تصميم جميع قوائم Window/Menus (67 قائمة).
-- 340_ControlBarPro0_SkinGadgetsZH.big : Skin لعناصر القوائم، قابل للحذف وحده.
-- 340_ControlBarPro0_SkinLoadingZH.big : Skin لشريط التحميل، قابل للحذف وحده.
-- 340_ControlBarPro0_SkinBackgroundZH.big : خلفية MainMenuRuler، قابل للحذف وحده.
+- الحزمة الأساسية لا تستبدل خرائط Gadgets/Loading/Background العامة، لتجنب تعارضات مع ملفات اللعبة الأصلية.
 
 التثبيت:
 1. أغلق اللعبة.
@@ -1068,7 +1107,7 @@ def make_readme(path: Path) -> None:
 - حزمة القوائم تحتوي 67 ملف WND من GamePatch، مع أولوية نسخ Control Bar Pro المعدلة عندما تتوفر.
 - MainMenu.wnd معدل إلى 1640x720 مع مقياس 1.2 يسار و1.4 يمين حسب التصميم.
 - ControlBar مقسم إلى ثلاث قطع L/C/R مع مقاييس 0.75 / 0.93 / 0.80 ومثبت أسفل الشاشة.
-- تم تجنب تعديل ReplayControl.wnd وGeneralsExpPoints.wnd خارج التحويل المطلوب.
+- تم الحفاظ على بنية BIG/9-slice الرسمية، مع استخدام DDS الرسمي المعالج 0.5 للـControl Bar.
 """
     write_text(path, text)
 
@@ -1112,26 +1151,13 @@ def main() -> None:
     # Control bar data + official font scaling.
     control_work = out / ".work_controlbar"
     control_big = out / "340_ControlBarPro1640x720ZH.big"
-    build_controlbar_big(cb_root, control_work, control_big)
+    build_controlbar_big(cb_root, control_work, control_big, art_candidates[0])
 
-    # Optional independent skins.
-    maps = parse_mapped_images(gp_root / "GameFilesOriginalZH")
-    gadgets_work = out / ".work_gadgets"
-    pack_gadgets(gadgets_work, maps)
-
-    loading_work = out / ".work_loading"
-    make_loading_bar(loading_work)
-
-    bg_work = out / ".work_background"
-    make_main_menu_ruler(bg_work)
-
-    gadgets_big = out / "340_ControlBarPro0_SkinGadgetsZH.big"
-    loading_big = out / "340_ControlBarPro0_SkinLoadingZH.big"
-    background_big = out / "340_ControlBarPro0_SkinBackgroundZH.big"
-    package_simple_big(gadgets_work, gadgets_big)
-    package_simple_big(loading_work, loading_big)
-    package_simple_big(bg_work, background_big)
-
+    # Base package intentionally contains only the official-style core,
+    # the resized Control Bar data, and the standalone menu override.
+    # Synthetic gadget/loading/background skins are not included in the base
+    # install because they can redefine unrelated retail mappings.
+    #
     # Read every BIG with the same reader that packs our custom archives.
     for big in sorted(out.glob("*.big")):
         entries = read_big(big)
@@ -1158,9 +1184,6 @@ def main() -> None:
         "340_ControlBarProArt1080ZH.big",
         "340_ControlBarPro1640x720ZH.big",
         "340_ControlBarPro0_MenusZH.big",
-        "340_ControlBarPro0_SkinGadgetsZH.big",
-        "340_ControlBarPro0_SkinLoadingZH.big",
-        "340_ControlBarPro0_SkinBackgroundZH.big",
         "README_1640x720_AR.txt",
     }
     with zipfile.ZipFile(final_zip) as zf:
