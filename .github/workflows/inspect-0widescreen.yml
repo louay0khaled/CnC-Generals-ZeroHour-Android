@@ -3,7 +3,6 @@ name: Inspect 0Widescreen.big
 on:
   push:
     branches: [main]
-    paths: ['0Widescreen.big']
   workflow_dispatch:
 
 permissions:
