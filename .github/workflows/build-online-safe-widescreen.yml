@@ -29,7 +29,7 @@ jobs:
           if raw[:4] != b"BIGF":
               raise SystemExit("0Widescreen.big is not a BIGF archive")
 
-          total_size, file_count, data_start = struct.unpack("<III", raw[4:16])
+          total_size = struct.unpack("<I", raw[4:8])[0]\n          file_count, data_start = struct.unpack(">II", raw[8:16])
           if total_size != len(raw):
               raise SystemExit(f"Header size mismatch: header={total_size}, actual={len(raw)}")
 
@@ -38,7 +38,7 @@ jobs:
           for _ in range(file_count):
               if pos + 8 > len(raw):
                   raise SystemExit("Truncated BIG directory entry")
-              offset, size = struct.unpack("<II", raw[pos:pos+8])
+              offset, size = struct.unpack(">II", raw[pos:pos+8])
               pos += 8
               end = raw.find(b"\x00", pos)
               if end < 0:
@@ -64,14 +64,14 @@ jobs:
               raise SystemExit("Nothing left after stripping")
 
           directory_size = sum(8 + len(name.encode("latin-1")) + 1 for name, _ in kept)
-          new_data_start = 16 + directory_size
+          new_data_start = (16 + directory_size + 15) & ~15
           cursor = new_data_start
 
           directory = bytearray()
           payload = bytearray()
           for name, data in kept:
               name_b = name.encode("latin-1")
-              directory += struct.pack("<II", cursor, len(data))
+              directory += struct.pack(">II", cursor, len(data))
               directory += name_b + b"\x00"
               payload += data
               cursor += len(data)
@@ -79,21 +79,21 @@ jobs:
           new_total = new_data_start + len(payload)
           out.write_bytes(
               b"BIGF"
-              + struct.pack("<III", new_total, len(kept), new_data_start)
+              + struct.pack("<I", new_total) + struct.pack(">II", len(kept), new_data_start)
               + directory
               + payload
           )
 
           # Independent validation of the rebuilt archive.
           check = out.read_bytes()
-          h_size, h_count, h_start = struct.unpack("<III", check[4:16])
+          h_size = struct.unpack("<I", check[4:8])[0]\n          h_count, h_start = struct.unpack(">II", check[8:16])
           if check[:4] != b"BIGF" or h_size != len(check) or h_count != len(kept) or h_start != new_data_start:
               raise SystemExit("Rebuilt BIG validation failed")
 
           p = 16
           names = []
           for _ in range(h_count):
-              off, sz = struct.unpack("<II", check[p:p+8])
+              off, sz = struct.unpack(">II", check[p:p+8])
               p += 8
               e = check.find(b"\x00", p)
               n = check[p:e].decode("latin-1")
