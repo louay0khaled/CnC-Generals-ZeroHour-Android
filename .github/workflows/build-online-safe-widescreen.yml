@@ -29,7 +29,8 @@ jobs:
           if raw[:4] != b"BIGF":
               raise SystemExit("0Widescreen.big is not a BIGF archive")
 
-          total_size = struct.unpack("<I", raw[4:8])[0]\n          file_count, data_start = struct.unpack(">II", raw[8:16])
+          total_size = struct.unpack("<I", raw[4:8])[0]
+          file_count, data_start = struct.unpack(">II", raw[8:16])
           if total_size != len(raw):
               raise SystemExit(f"Header size mismatch: header={total_size}, actual={len(raw)}")
 
@@ -86,7 +87,8 @@ jobs:
 
           # Independent validation of the rebuilt archive.
           check = out.read_bytes()
-          h_size = struct.unpack("<I", check[4:8])[0]\n          h_count, h_start = struct.unpack(">II", check[8:16])
+          h_size = struct.unpack("<I", check[4:8])[0]
+          h_count, h_start = struct.unpack(">II", check[8:16])
           if check[:4] != b"BIGF" or h_size != len(check) or h_count != len(kept) or h_start != new_data_start:
               raise SystemExit("Rebuilt BIG validation failed")
 
