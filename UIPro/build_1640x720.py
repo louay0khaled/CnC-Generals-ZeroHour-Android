@@ -388,8 +388,8 @@ def modernize_wnd(
             header = re.sub(r"\b209\s+253\s+4\b", "120 235 255", header)
         elif mode == "control":
             header = replace_screenrect(header, transform_control_rect)
-            if wtype == "USER" and "GenPowersShortcutBar" in name:
-                header = replace_screenrect(header, transform_power_rect)
+        elif mode == "power":
+            header = replace_screenrect(header, transform_power_rect)
 
         lines[hs:he] = [header]
 
@@ -521,15 +521,12 @@ def commandbar_mapped_image_block(name: str, texture: str, suffix: str, left: in
 
 
 def rewrite_commandbar_mapping(path: Path, base_name: str, texture: str) -> None:
-    left, _ = COMMAND_RANGES["L"]
-    _, c_right = COMMAND_RANGES["C"]
-    _, right = COMMAND_RANGES["R"]
     text = (
         f"MappedImage {base_name}\n"
         f"  Texture = {texture}\n"
-        "  TextureWidth = 4096\n"
-        "  TextureHeight = 1024\n"
-        "  Coords = Left:0 Top:0 Right:3840 Bottom:1024\n"
+        "  TextureWidth = 1920\n"
+        "  TextureHeight = 512\n"
+        "  Coords = Left:0 Top:0 Right:1920 Bottom:512\n"
         "  Status = NONE\n"
         "End\n\n"
         + commandbar_mapped_image_block(base_name, texture, "L", *COMMAND_RANGES["L"])
@@ -935,16 +932,76 @@ def apply_official_font_scaling(cb_root: Path, work: Path) -> None:
         write_text(work / "Data" / "English" / name, scaled)
 
 
+def make_background_marker_transparent(work_root: Path) -> None:
+    path = work_root / "Window" / "ControlBar.wnd"
+    text = read_text(path)
+    text = re.sub(
+        r'(?s)(NAME\s*=\s*"ControlBar\.wnd:BackgroundMarker";.*?DRAWCALLBACK\s*=\s*)"[^"]+";',
+        r'\1"W3DNoDraw";',
+        text,
+        count=1,
+    )
+    write_text(path, text)
+
+
+def build_commandbar_texture(
+    cb_root: Path,
+    work_root: Path,
+    psd_name: str,
+    out_name: str,
+) -> str:
+    try:
+        from psd_tools import PSDImage
+    except ImportError as exc:
+        raise RuntimeError("psd-tools is required for command bar texture generation") from exc
+
+    psd_path = cb_root / "GameFilesEdited" / "Art" / "Textures" / psd_name
+    if not psd_path.is_file():
+        raise FileNotFoundError(psd_path)
+
+    psd = PSDImage.open(psd_path)
+    image = psd.composite().convert("RGBA")
+
+    # Official art is 4096x1024. The Control Bar design uses the 3840x1024 mapped
+    # region; scale it to the requested 1920x512 working texture.
+    image = image.resize((2048, 512), Image.Resampling.BOX)
+    image = image.crop((0, 0, 1920, 512))
+
+    # Remove the reserved gaps so transparent regions reveal the game world instead
+    # of the black pixels underneath the artwork.
+    alpha = image.getchannel("A")
+    for left, right in ((340, 592), (1326, 1625)):
+        alpha.paste(0, (left, 0, right, 512))
+    image.putalpha(alpha)
+
+    out_path = work_root / "Art" / "Textures" / out_name
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(out_path, format="TGA")
+    return out_name
+
+
 def build_controlbar_big(cb_root: Path, work_root: Path, out: Path) -> None:
     copy_controlbar_data(cb_root, work_root)
 
     controlbar = work_root / "Window" / "ControlBar.wnd"
     write_text(controlbar, modernize_wnd(read_text(controlbar), mode="control"))
+    make_background_marker_transparent(work_root)
 
     for name in ("GenPowersShortcutBarUS.wnd", "GenPowersShortcutBarChina.wnd", "GenPowersShortcutBarGLA.wnd"):
         path = work_root / "Window" / name
         if path.exists():
-            write_text(path, modernize_wnd(read_text(path), mode="control"))
+            write_text(path, modernize_wnd(read_text(path), mode="power"))
+
+    commandbar_psds = {
+        "AmericaProCommandBar": ("AmericaCommandBarPro_4096_1024.psd", "ZProAmericaCommandBar_1920x512.tga"),
+        "ChinaProCommandBar": ("ChinaCommandBarPro_4096_1024.psd", "ZProChinaCommandBar_1920x512.tga"),
+        "GlaProCommandBar": ("GlaCommandBarPro_4096_1024.psd", "ZProGlaCommandBar_1920x512.tga"),
+        "ObserverProCommandBar": ("ObsCommandBarPro_4096_1024.psd", "ZProObsCommandBar_1920x512.tga"),
+    }
+
+    generated = {}
+    for base_name, (psd_name, out_name) in commandbar_psds.items():
+        generated[base_name] = build_commandbar_texture(cb_root, work_root, psd_name, out_name)
 
     scheme = work_root / "Data" / "INI" / "ControlBarScheme.ini"
     write_text(scheme, transform_scheme(read_text(scheme)))
@@ -959,7 +1016,7 @@ def build_controlbar_big(cb_root: Path, work_root: Path, out: Path) -> None:
     for filename, base_name in cb_maps.items():
         path = hand / filename
         if path.exists():
-            rewrite_commandbar_mapping(path, base_name, COMMAND_BAR_BASES[base_name])
+            rewrite_commandbar_mapping(path, base_name, generated[base_name])
 
     apply_official_font_scaling(cb_root, work_root)
     pack_big(work_root, out)
@@ -1065,6 +1122,11 @@ def main() -> None:
     for big in sorted(out.glob("*.big")):
         entries = read_big(big)
         print(f"VERIFY {big.name}: {len(entries)} entries, {big.stat().st_size} bytes")
+
+    verify_big_semantics(
+        menu_big,
+        set(selected),
+    )
 
     readme = out / "README_1640x720_AR.txt"
     make_readme(readme)
