@@ -1,4 +1,4 @@
-name: Build Generals UI Pro All Menus
+name: Build Generals UI Pro 1640x720
 
 on:
   push:
@@ -15,7 +15,7 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout this repository
+      - name: Checkout Android project
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -28,89 +28,91 @@ jobs:
           path: _controlbar_source
           fetch-depth: 1
 
-      - name: Prepare official ModBuilder project
+      - name: Checkout official Generals Game Patch source
+        uses: actions/checkout@v4
+        with:
+          repository: TheSuperHackers/GeneralsGamePatch
+          ref: main
+          path: _gamepatch_source
+          fetch-depth: 1
+
+      - name: Install image/PSD build dependencies
         shell: pwsh
         run: |
-          python "$env:GITHUB_WORKSPACE/UIPro/prepare_official_build.py" --source "$env:GITHUB_WORKSPACE/_controlbar_source/ControlBarProZH" --dest "$env:GITHUB_WORKSPACE/UIPro/OfficialBuild"
+          python -m pip install --disable-pip-version-check pillow psd-tools
 
-      - name: Verify all 37 source menus were themed
+      - name: Build exact 1640x720 UI package
         shell: pwsh
         run: |
-          $a = @(Get-ChildItem "$env:GITHUB_WORKSPACE/UIPro/OfficialBuild/GameFilesEdited/Window/Menus" -Filter *.wnd)
-          $b = @(Get-ChildItem "$env:GITHUB_WORKSPACE/UIPro/OfficialBuild/GameFilesEditedLanguage/Window/Menus" -Filter *.wnd)
-          if ($a.Count -ne 10) { throw "GameFilesEdited menu count is $($a.Count), expected 10 (official high-resolution set)" }
-          if ($b.Count -ne 37) { throw "GameFilesEditedLanguage menu count is $($b.Count), expected 37" }
-          Write-Host "Verified official menu split: 10 high-resolution edited menus + 37 language menus."
+          python "$env:GITHUB_WORKSPACE/UIPro/build_1640x720.py" --controlbar-root "$env:GITHUB_WORKSPACE/_controlbar_source/ControlBarProZH" --gamepatch-root "$env:GITHUB_WORKSPACE/_gamepatch_source/Patch104pZH" --official-zip "$env:GITHUB_WORKSPACE/_controlbar_source/ControlBarProZH/Release/ControlBarProZH_v1.2_1920x1080.zip" --out "$env:GITHUB_WORKSPACE/UIPro/Build1640"
 
-      - name: Install the exact ModBuilder used by Control Bar Pro
-        shell: cmd
-        run: |
-          call "%GITHUB_WORKSPACE%\_controlbar_source\ControlBarProZH\Scripts\Windows\InstallModBuilder.bat"
-          if errorlevel 1 exit /b %errorlevel%
-
-      - name: Create CI-only game runner override
+      - name: Verify final package contents
         shell: pwsh
         run: |
-          $game = "$env:GITHUB_WORKSPACE/UIPro/OfficialBuild/CI_Game"
-          New-Item -ItemType Directory -Force -Path $game | Out-Null
-          New-Item -ItemType File -Force -Path "$game/generals.exe" | Out-Null
-          @'
-          {"runner":{"version":1,"gameInstallPath":"CI_Game","gameExeFile":"generals.exe","gameExeArgs":{"-win":"","-quickstart":""},"relevantGameDataFileTypes":[],"regularGameDataFiles":[]}}
-          '@ | Set-Content -Encoding ascii "$env:GITHUB_WORKSPACE/UIPro/OfficialBuild/CI_ModRunner.json"
+          $dir = "$env:GITHUB_WORKSPACE/UIPro/Build1640"
+          $expected = @(
+            "340_ControlBarProZH.big",
+            "340_ControlBarProArt1080ZH.big",
+            "340_ControlBarPro1640x720ZH.big",
+            "340_ControlBarPro0_MenusZH.big",
+            "340_ControlBarPro0_SkinGadgetsZH.big",
+            "340_ControlBarPro0_SkinLoadingZH.big",
+            "340_ControlBarPro0_SkinBackgroundZH.big",
+            "README_1640x720_AR.txt"
+          )
 
-      - name: Build release with official ModBuilder
-        shell: cmd
-        run: |
-          call "%GITHUB_WORKSPACE%\_controlbar_source\ControlBarProZH\Scripts\Windows\Setup.bat"
-          if errorlevel 1 exit /b %errorlevel%
-          "%ModBuilderExe%" --build --release --verbose-logging --config-list "%GITHUB_WORKSPACE%\UIPro\OfficialBuild\ModBundleItems.json" "%GITHUB_WORKSPACE%\UIPro\OfficialBuild\ModBundlePacks.json" "%GITHUB_WORKSPACE%\UIPro\OfficialBuild\ModFolders.json" "%GITHUB_WORKSPACE%\UIPro\OfficialBuild\ModRunner.json" "%GITHUB_WORKSPACE%\UIPro\OfficialBuild\CI_ModRunner.json"
-          if errorlevel 1 exit /b %errorlevel%
+          foreach ($name in $expected) {
+            if (-not (Test-Path (Join-Path $dir $name))) {
+              throw "Missing final package file: $name"
+            }
+          }
 
-      - name: Verify official BIG/ZIP release output
-        shell: pwsh
-        run: |
-          $release = "$env:GITHUB_WORKSPACE/UIPro/OfficialBuild/.Release"
-          if (-not (Test-Path $release)) { throw "Missing ModBuilder release directory: $release" }
-          $bigs = @(Get-ChildItem $release -Filter *.big)
-          if ($bigs.Count -ne 0) { throw "Official ModBuilder release should contain the BIG files inside the pack ZIP, not beside it." }
-          $zip = @(Get-ChildItem $release -Filter *.zip)
-          if ($zip.Count -ne 1) { throw "Expected exactly one pack ZIP, found $($zip.Count)" }
-          python "$env:GITHUB_WORKSPACE/UIPro/verify_modbuilder_release.py" --zip $zip[0].FullName
-          Write-Host "Official ModBuilder release ZIP verification passed."
+          $zip = "$env:GITHUB_WORKSPACE/UIPro/GeneralsUIPro_1640x720_Android_v2.zip"
+          if (-not (Test-Path $zip)) {
+            throw "Missing final ZIP: $zip"
+          }
+
+          python -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1]); expected=set(sys.argv[2:]); actual=set(z.namelist()); assert actual==expected,(expected-actual,actual-expected); print('Final ZIP verified:',sorted(actual))" "$zip" @expected
 
       - name: Stage release files
         shell: pwsh
         run: |
-          $source = "$env:GITHUB_WORKSPACE/UIPro/OfficialBuild/.Release"
+          $source = "$env:GITHUB_WORKSPACE/UIPro/Build1640"
           $dest = "$env:GITHUB_WORKSPACE/UIPro/Release"
+
           New-Item -ItemType Directory -Force -Path $dest | Out-Null
           Get-ChildItem $dest -File | Remove-Item -Force
-          Copy-Item "$source/*.zip" $dest -Force
+
+          Copy-Item "$source/*.big" $dest -Force
+          Copy-Item "$source/README_1640x720_AR.txt" $dest -Force
+          Copy-Item "$env:GITHUB_WORKSPACE/UIPro/GeneralsUIPro_1640x720_Android_v2.zip" $dest -Force
+
           foreach ($file in Get-ChildItem $dest -File) {
             $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLower()
             "$hash  $($file.Name)" | Set-Content -NoNewline -Encoding ascii "$($file.FullName).sha256"
           }
 
-      - name: Upload official release artifact
+      - name: Upload 1640x720 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: GeneralsUIPro-OfficialModBuilder-1080
+          name: GeneralsUIPro-1640x720-Android
           path: |
             UIPro/Release/*.big
             UIPro/Release/*.zip
+            UIPro/Release/*.txt
             UIPro/Release/*.sha256
           if-no-files-found: error
 
-      - name: Commit release files into ui-pro
+      - name: Commit release files
         shell: cmd
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -f UIPro/Release/
-          git add UIPro/OfficialBuild/ModBundleItems.json UIPro/OfficialBuild/ModBundlePacks.json UIPro/OfficialBuild/ModFolders.json UIPro/OfficialBuild/ModRunner.json UIPro/prepare_official_build.py .github/workflows/build-ui-pro.yml
-          git rm -f --ignore-unmatch UIPro/build_menu_big.py
+          git add UIPro/build_1640x720.py .github/workflows/build-ui-pro.yml
+          git rm -f --ignore-unmatch UIPro/build_menu_big.py UIPro/prepare_official_build.py UIPro/verify_modbuilder_release.py
           git diff --cached --quiet
           if not errorlevel 1 exit /b 0
-          git commit -m "Build UI Pro with official Generals Mod Builder"
+          git commit -m "Build exact Generals UI Pro 1640x720 package"
           if errorlevel 1 exit /b %errorlevel%
           git push origin HEAD:ui-pro
