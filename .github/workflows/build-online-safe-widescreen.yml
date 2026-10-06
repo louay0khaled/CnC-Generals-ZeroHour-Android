@@ -15,10 +15,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Strip CRC-sensitive files and rebuild BIG
+      - name: Strip INI/BAK and rebuild BIGF
         shell: python
         run: |
-          import os
+          import hashlib
           import struct
           from pathlib import Path
 
@@ -27,42 +27,40 @@ jobs:
           raw = src.read_bytes()
 
           if raw[:4] != b"BIGF":
-              raise SystemExit("0Widescreen.big is not a BIGF archive")
+              raise SystemExit("Not a BIGF archive")
 
           total_size = struct.unpack("<I", raw[4:8])[0]
-          file_count, data_start = struct.unpack(">II", raw[8:16])
+          file_count = struct.unpack(">I", raw[8:12])[0]
+          data_start = struct.unpack(">I", raw[12:16])[0]
+
           if total_size != len(raw):
-              raise SystemExit(f"Header size mismatch: header={total_size}, actual={len(raw)}")
+              raise SystemExit(f"Input size mismatch: {total_size} != {len(raw)}")
 
           pos = 16
           entries = []
-          for _ in range(file_count):
-              if pos + 8 > len(raw):
-                  raise SystemExit("Truncated BIG directory entry")
-              offset, size = struct.unpack(">II", raw[pos:pos+8])
+          for i in range(file_count):
+              if pos + 8 > data_start:
+                  raise SystemExit("Truncated directory")
+              offset = struct.unpack(">I", raw[pos:pos+4])[0]
+              size = struct.unpack(">I", raw[pos+4:pos+8])[0]
               pos += 8
               end = raw.find(b"\x00", pos)
               if end < 0:
-                  raise SystemExit("Unterminated BIG filename")
+                  raise SystemExit("Unterminated filename")
               name = raw[pos:end].decode("latin-1")
               pos = end + 1
               if offset + size > len(raw):
-                  raise SystemExit(f"Invalid data range for {name}")
+                  raise SystemExit(f"Invalid source range: {name}")
               entries.append((name, raw[offset:offset+size]))
 
-          # Generals Online's important INI CRC must remain vanilla.
-          # Remove every INI from this legacy widescreen archive, plus the backup.
-          kept = []
           removed = []
+          kept = []
           for name, data in entries:
               low = name.replace("/", "\\").lower()
               if low.endswith(".ini") or low.endswith(".bak"):
                   removed.append(name)
               else:
                   kept.append((name, data))
-
-          if not kept:
-              raise SystemExit("Nothing left after stripping")
 
           directory_size = sum(8 + len(name.encode("latin-1")) + 1 for name, _ in kept)
           new_data_start = (16 + directory_size + 15) & ~15
@@ -72,62 +70,64 @@ jobs:
           payload = bytearray()
           for name, data in kept:
               name_b = name.encode("latin-1")
-              directory += struct.pack(">II", cursor, len(data))
+              directory += struct.pack(">I", cursor)
+              directory += struct.pack(">I", len(data))
               directory += name_b + b"\x00"
               payload += data
               cursor += len(data)
 
+          padding = b"\x00" * (new_data_start - (16 + directory_size))
           new_total = new_data_start + len(payload)
+
           out.write_bytes(
               b"BIGF"
-              + struct.pack("<I", new_total) + struct.pack(">II", len(kept), new_data_start)
+              + struct.pack("<I", new_total)
+              + struct.pack(">I", len(kept))
+              + struct.pack(">I", new_data_start)
               + directory
+              + padding
               + payload
           )
 
-          # Independent validation of the rebuilt archive.
+          # Validate header and every entry.
           check = out.read_bytes()
           h_size = struct.unpack("<I", check[4:8])[0]
-          h_count, h_start = struct.unpack(">II", check[8:16])
+          h_count = struct.unpack(">I", check[8:12])[0]
+          h_start = struct.unpack(">I", check[12:16])[0]
+
+          print(f"VALID: size={h_size} actual={len(check)} count={h_count} expected={len(kept)} data_start={h_start} expected={new_data_start}")
+
           if check[:4] != b"BIGF" or h_size != len(check) or h_count != len(kept) or h_start != new_data_start:
-              raise SystemExit("Rebuilt BIG validation failed")
+              raise SystemExit("Header validation failed")
 
           p = 16
           names = []
           for _ in range(h_count):
-              off, sz = struct.unpack(">II", check[p:p+8])
+              off = struct.unpack(">I", check[p:p+4])[0]
+              sz = struct.unpack(">I", check[p+4:p+8])[0]
               p += 8
               e = check.find(b"\x00", p)
+              if e < 0:
+                  raise SystemExit("Broken rebuilt filename")
               n = check[p:e].decode("latin-1")
               p = e + 1
               if off + sz > len(check):
-                  raise SystemExit(f"Rebuilt BIG has invalid range: {n}")
+                  raise SystemExit(f"Invalid rebuilt range: {n}")
               names.append(n)
 
-          if any(n.lower().endswith((".ini", ".bak")) for n in names):
-              raise SystemExit("Forbidden INI/BAK entry remains")
+          if any(n.lower().endswith(".ini") or n.lower().endswith(".bak") for n in names):
+              raise SystemExit("Forbidden INI/BAK file remains")
 
-          print(f"Original: {file_count} files, {len(raw):,} bytes")
-          print(f"Removed: {len(removed)}")
+          print(f"Removed {len(removed)} files:")
           for n in removed:
-              print(f"  - {n}")
-          print(f"Kept: {len(kept)}")
-          for n in names:
-              print(f"  + {n}")
-          print(f"Output: {len(check):,} bytes")
-          Path("ONLINE_SAFE_MANIFEST.txt").write_text(
-              "Removed for Generals Online CRC safety:\n"
-              + "".join(f"- {n}\n" for n in removed)
-              + "\nKept:\n"
-              + "".join(f"- {n}\n" for n in names),
-              encoding="utf-8",
-          )
+              print("  -", n)
+
+          print(f"Kept {len(names)} files")
+          print("SHA256", hashlib.sha256(check).hexdigest())
 
       - name: Upload modified BIG
         uses: actions/upload-artifact@v4
         with:
           name: 0Widescreen_OnlineSafe
-          path: |
-            0Widescreen_OnlineSafe.big
-            ONLINE_SAFE_MANIFEST.txt
+          path: 0Widescreen_OnlineSafe.big
           if-no-files-found: error
