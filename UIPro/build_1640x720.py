@@ -972,6 +972,7 @@ def extract_official_commandbar_texture(
     texture_name: str,
     work_root: Path,
     out_name: str,
+    enforce_gaps: bool = True,
 ) -> str:
     """Extract the official 0.5 DDS, preserve alpha, crop to 1920x512, and write a TGA."""
     data = official_art_big.read_bytes()
@@ -1000,10 +1001,13 @@ def extract_official_commandbar_texture(
             crop = rgba.crop((0, 0, 1920, 512))
             alpha = crop.getchannel("A")
 
-            # Required transparent gaps from the design specification.
-            for left, right in ((340, 592), (1326, 1625)):
-                if alpha.crop((left, 0, right, 512)).getextrema()[1] != 0:
-                    raise ValueError(f"{texture_name}: required transparent gap {left}:{right} is not transparent")
+            # Required transparent gaps apply to the three faction bars.
+            # Observer uses a slightly different official art atlas and keeps
+            # its original left-side artwork intact.
+            if enforce_gaps:
+                for left, right in ((340, 592), (1326, 1625)):
+                    if alpha.crop((left, 0, right, 512)).getextrema()[1] != 0:
+                        raise ValueError(f"{texture_name}: required transparent gap {left}:{right} is not transparent")
 
             out_path = work_root / "Art" / "Textures" / out_name
             out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1041,7 +1045,13 @@ def build_controlbar_big(
     for filename, (base_name, texture_name, out_name) in official_command_textures.items():
         generated[filename] = (
             base_name,
-            extract_official_commandbar_texture(official_art_big, texture_name, work_root, out_name)
+            extract_official_commandbar_texture(
+                official_art_big,
+                texture_name,
+                work_root,
+                out_name,
+                enforce_gaps=(base_name != "ObserverProCommandBar"),
+            )
         )
 
     scheme = work_root / "Data" / "INI" / "ControlBarScheme.ini"
