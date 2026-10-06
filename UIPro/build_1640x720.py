@@ -971,7 +971,7 @@ def verify_official_commandbar_texture(official_art_big: Path, texture_name: str
     for _ in range(count):
         off, size = struct.unpack_from(">II", data, pos)
         pos += 8
-        end = data.index(b"\\x00", pos)
+        end = data.index(b"\x00", pos)
         name = data[pos:end].decode("ascii")
         pos = end + 1
         if name.lower() == target.lower():
@@ -1030,48 +1030,6 @@ def build_controlbar_big(
         path = hand / filename
         if path.exists():
             rewrite_commandbar_mapping(path, base_name, texture)
-
-    apply_official_font_scaling(cb_root, work_root)
-    pack_big(work_root, out)
-
-
-def build_controlbar_big(cb_root: Path, work_root: Path, out: Path) -> None:
-    copy_controlbar_data(cb_root, work_root)
-
-    controlbar = work_root / "Window" / "ControlBar.wnd"
-    write_text(controlbar, modernize_wnd(read_text(controlbar), mode="control"))
-    make_background_marker_transparent(work_root)
-
-    for name in ("GenPowersShortcutBarUS.wnd", "GenPowersShortcutBarChina.wnd", "GenPowersShortcutBarGLA.wnd"):
-        path = work_root / "Window" / name
-        if path.exists():
-            write_text(path, modernize_wnd(read_text(path), mode="power"))
-
-    commandbar_psds = {
-        "AmericaProCommandBar": ("AmericaCommandBarPro_4096_1024.psd", "ZProAmericaCommandBar_1920x512.tga"),
-        "ChinaProCommandBar": ("ChinaCommandBarPro_4096_1024.psd", "ZProChinaCommandBar_1920x512.tga"),
-        "GlaProCommandBar": ("GlaCommandBarPro_4096_1024.psd", "ZProGlaCommandBar_1920x512.tga"),
-        "ObserverProCommandBar": ("ObsCommandBarPro_4096_1024.psd", "ZProObsCommandBar_1920x512.tga"),
-    }
-
-    generated = {}
-    for base_name, (psd_name, out_name) in commandbar_psds.items():
-        generated[base_name] = build_commandbar_texture(cb_root, work_root, psd_name, out_name)
-
-    scheme = work_root / "Data" / "INI" / "ControlBarScheme.ini"
-    write_text(scheme, transform_scheme(read_text(scheme)))
-
-    cb_maps = {
-        "AmericaCommandBarPro.ini": "AmericaProCommandBar",
-        "ChinaCommandBarPro.ini": "ChinaProCommandBar",
-        "GlaCommandBarPro.ini": "GlaProCommandBar",
-        "ObsCommandBarPro.ini": "ObserverProCommandBar",
-    }
-    hand = work_root / "Data" / "INI" / "MappedImages" / "HandCreated"
-    for filename, base_name in cb_maps.items():
-        path = hand / filename
-        if path.exists():
-            rewrite_commandbar_mapping(path, base_name, generated[base_name])
 
     apply_official_font_scaling(cb_root, work_root)
     pack_big(work_root, out)
