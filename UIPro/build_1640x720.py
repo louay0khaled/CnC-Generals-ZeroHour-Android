@@ -348,6 +348,7 @@ def style_panel(header: str) -> str:
     name = block_name(header)
     if not re.search(r":MapBorder[^:]*$", name):
         return header
+
     panel = ("4 10 20 190", "40 140 220 255")
     for key in ("ENABLED", "DISABLED", "HILITED"):
         pattern = re.compile(
@@ -357,14 +358,18 @@ def style_panel(header: str) -> str:
         m = pattern.search(header)
         if not m:
             continue
+
         indent = m.group(1)
-        entries = [panel] + [TRANSPARENT_DRAW] * 8
+        color, border = panel
         lines = [f"{indent}{key}DRAWDATA = "]
-        for idx, (color, border) in enumerate(entries):
+        for idx in range(9):
             prefix = "" if idx == 0 else f"{indent}                  "
             comma = "," if idx < 8 else ";"
-            lines.append(f"{prefix}IMAGE: NoImage, COLOR: {color}, BORDERCOLOR: {border}{comma}")
+            lines.append(
+                f"{prefix}IMAGE: NoImage, COLOR: {color}, BORDERCOLOR: {border}{comma}"
+            )
         header = header[:m.start()] + "\n".join(lines) + "\n" + header[m.end():]
+
     return header
 
 
@@ -962,8 +967,13 @@ def make_background_marker_transparent(work_root: Path) -> None:
     write_text(path, text)
 
 
-def verify_official_commandbar_texture(official_art_big: Path, texture_name: str) -> tuple[int, int]:
-    """Verify the already-processed official 0.5 command-bar DDS and its alpha."""
+def extract_official_commandbar_texture(
+    official_art_big: Path,
+    texture_name: str,
+    work_root: Path,
+    out_name: str,
+) -> str:
+    """Extract the official 0.5 DDS, preserve alpha, crop to 1920x512, and write a TGA."""
     data = official_art_big.read_bytes()
     count = struct.unpack_from(">I", data, 8)[0]
     pos = 16
@@ -974,16 +984,32 @@ def verify_official_commandbar_texture(official_art_big: Path, texture_name: str
         end = data.index(b"\x00", pos)
         name = data[pos:end].decode("ascii")
         pos = end + 1
-        if name.lower() == target.lower():
-            from io import BytesIO
-            with Image.open(BytesIO(data[off:off + size])) as im:
-                rgba = im.convert("RGBA")
-                if rgba.size != (2048, 512):
-                    raise ValueError(f"{texture_name}: expected official 2048x512 DDS, got {rgba.size}")
-                alpha = rgba.getchannel("A")
-                if alpha.getextrema()[0] != 0:
-                    raise ValueError(f"{texture_name}: official DDS lost transparency")
-                return rgba.size
+        if name.lower() != target.lower():
+            continue
+
+        from io import BytesIO
+        with Image.open(BytesIO(data[off:off + size])) as im:
+            rgba = im.convert("RGBA")
+            if rgba.size != (2048, 512):
+                raise ValueError(f"{texture_name}: expected official 2048x512 DDS, got {rgba.size}")
+            if rgba.getchannel("A").getextrema()[0] != 0:
+                raise ValueError(f"{texture_name}: official DDS lost transparency")
+
+            # The official 0.5 build is already the correct baseline art.
+            # Crop only the unused 128px right margin; do not recomposite the PSD.
+            crop = rgba.crop((0, 0, 1920, 512))
+            alpha = crop.getchannel("A")
+
+            # Required transparent gaps from the design specification.
+            for left, right in ((340, 592), (1326, 1625)):
+                if alpha.crop((left, 0, right, 512)).getextrema()[1] != 0:
+                    raise ValueError(f"{texture_name}: required transparent gap {left}:{right} is not transparent")
+
+            out_path = work_root / "Art" / "Textures" / out_name
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            crop.save(out_path, format="TGA")
+            return out_name
+
     raise FileNotFoundError(f"Official Art1080 BIG is missing {texture_name}")
 
 
@@ -1004,32 +1030,28 @@ def build_controlbar_big(
         if path.exists():
             write_text(path, modernize_wnd(read_text(path), mode="power"))
 
-    # Use the official ModBuilder-produced 0.5 textures from Art1080 directly.
-    # They are already correctly resampled and retain transparent alpha around
-    # the three visible control-bar regions. We only change their mapped-image
-    # coordinates; no PSD recompositing is performed.
     official_command_textures = {
-        "AmericaCommandBarPro.ini": ("AmericaProCommandBar", "Art\\Textures\\AmericaCommandBarPro_4096_1024.dds"),
-        "ChinaCommandBarPro.ini": ("ChinaProCommandBar", "Art\\Textures\\ChinaCommandBarPro_4096_1024.dds"),
-        "GlaCommandBarPro.ini": ("GlaProCommandBar", "Art\\Textures\\GlaCommandBarPro_4096_1024.dds"),
-        "ObsCommandBarPro.ini": ("ObserverProCommandBar", "Art\\Textures\\ObsCommandBarPro_4096_1024.dds"),
+        "AmericaCommandBarPro.ini": ("AmericaProCommandBar", "Art\\Textures\\AmericaCommandBarPro_4096_1024.dds", "ZProAmericaCommandBar_1920x512.tga"),
+        "ChinaCommandBarPro.ini": ("ChinaProCommandBar", "Art\\Textures\\ChinaCommandBarPro_4096_1024.dds", "ZProChinaCommandBar_1920x512.tga"),
+        "GlaCommandBarPro.ini": ("GlaProCommandBar", "Art\\Textures\\GlaCommandBarPro_4096_1024.dds", "ZProGlaCommandBar_1920x512.tga"),
+        "ObsCommandBarPro.ini": ("ObserverProCommandBar", "Art\\Textures\\ObsCommandBarPro_4096_1024.dds", "ZProObsCommandBar_1920x512.tga"),
     }
-    for texture in (
-        "Art\\Textures\\AmericaCommandBarPro_4096_1024.dds",
-        "Art\\Textures\\ChinaCommandBarPro_4096_1024.dds",
-        "Art\\Textures\\GlaCommandBarPro_4096_1024.dds",
-        "Art\\Textures\\ObsCommandBarPro_4096_1024.dds",
-    ):
-        verify_official_commandbar_texture(official_art_big, texture)
+
+    generated = {}
+    for filename, (base_name, texture_name, out_name) in official_command_textures.items():
+        generated[filename] = (
+            base_name,
+            extract_official_commandbar_texture(official_art_big, texture_name, work_root, out_name)
+        )
 
     scheme = work_root / "Data" / "INI" / "ControlBarScheme.ini"
     write_text(scheme, transform_scheme(read_text(scheme)))
 
     hand = work_root / "Data" / "INI" / "MappedImages" / "HandCreated"
-    for filename, (base_name, texture) in official_command_textures.items():
+    for filename, (base_name, _source_texture, texture) in official_command_textures.items():
         path = hand / filename
         if path.exists():
-            rewrite_commandbar_mapping(path, base_name, texture)
+            rewrite_commandbar_mapping(path, base_name, generated[filename][1])
 
     apply_official_font_scaling(cb_root, work_root)
     pack_big(work_root, out)
@@ -1050,7 +1072,7 @@ def make_readme(path: Path) -> None:
 - 340_ControlBarProArt1080ZH.big       : ملفات Art الرسمية بدون تعديل.
 - 340_ControlBarPro1640x720ZH.big      : Control Bar Pro معدل فعليًا إلى 1640x720.
 - 340_ControlBarPro0_MenusZH.big       : إعادة تصميم جميع قوائم Window/Menus (67 قائمة).
-- الحزمة الأساسية لا تستبدل خرائط Gadgets/Loading/Background العامة، لتجنب تعارضات مع ملفات اللعبة الأصلية.
+- الحزمة الأساسية تستخدم Art الرسمي المعالج 0.5، مع قص شفاف إلى 1920x512 فقط؛ لا يوجد إعادة تركيب للـPSD.
 
 التثبيت:
 1. أغلق اللعبة.
